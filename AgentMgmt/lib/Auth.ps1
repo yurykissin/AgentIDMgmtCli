@@ -284,18 +284,21 @@ function Initialize-AmToolkitApp {
     }
 
     $scopeString = $granted -join ' '
-    $grants = @(Invoke-AmGraph -Method GET -Token $bt -All -Path "/oauth2PermissionGrants?`$filter=clientId eq '$spId' and resourceId eq '$($graph.id)'")
-    $adminGrant = $grants | Where-Object { $_.consentType -eq 'AllPrincipals' } | Select-Object -First 1
-    if ($adminGrant) {
-        $null = Invoke-AmGraph -Method PATCH -Token $bt -Path "/oauth2PermissionGrants/$($adminGrant.id)" -Body @{ scope = $scopeString }
-    } else {
-        $grantBody = @{
-            clientId    = $spId
-            consentType = 'AllPrincipals'
-            resourceId  = $graph.id
-            scope       = $scopeString
+    $graphSpId = $graph.id
+    $grantBody = @{
+        clientId    = $spId
+        consentType = 'AllPrincipals'
+        resourceId  = $graphSpId
+        scope       = $scopeString
+    }
+    Invoke-AmWithPropagationRetry {
+        $grants = @(Invoke-AmGraph -Method GET -Token $bt -All -Path "/oauth2PermissionGrants?`$filter=clientId eq '$spId' and resourceId eq '$graphSpId'")
+        $adminGrant = $grants | Where-Object { $_.consentType -eq 'AllPrincipals' } | Select-Object -First 1
+        if ($adminGrant) {
+            $null = Invoke-AmGraph -Method PATCH -Token $bt -Path "/oauth2PermissionGrants/$($adminGrant.id)" -Body @{ scope = $scopeString }
+        } else {
+            $null = Invoke-AmGraph -Method POST -Token $bt -Path '/oauth2PermissionGrants' -Body $grantBody
         }
-        $null = Invoke-AmWithPropagationRetry { Invoke-AmGraph -Method POST -Token $bt -Path '/oauth2PermissionGrants' -Body $grantBody }
     }
 
     $script:State.TenantId = $tenant
