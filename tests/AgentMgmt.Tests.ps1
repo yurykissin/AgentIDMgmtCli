@@ -87,6 +87,46 @@ Describe 'Propagation retry' {
     }
 }
 
+Describe 'Blueprint application permissions' {
+    BeforeEach {
+        InModuleScope AgentMgmt { $script:State.Cache = @{} }
+        Mock -ModuleName AgentMgmt Invoke-AmGraph { [pscustomobject]@{ id = 'bp-obj'; appId = 'bp-app'; displayName = 'bp' } }
+        Mock -ModuleName AgentMgmt Get-AmBlueprintPrincipal { [pscustomobject]@{ id = 'princ' } }
+        Mock -ModuleName AgentMgmt Get-AmResourceSp {
+            [pscustomobject]@{ id = 'g-sp'; appId = '00000003-0000-0000-c000-000000000000'; displayName = 'Microsoft Graph'
+                appRoles = @([pscustomobject]@{ id = 'r1'; value = 'User.Read.All'; isEnabled = $true; allowedMemberTypes = @('Application') }) }
+        }
+        Mock -ModuleName AgentMgmt Add-AmBlueprintRequiredAccess { }
+        Mock -ModuleName AgentMgmt Grant-AmAppRole { }
+        Mock -ModuleName AgentMgmt Set-AmInheritablePermission { }
+        Mock -ModuleName AgentMgmt Get-AmInheritablePermissions { @([pscustomobject]@{ resourceAppId = '00000003-0000-0000-c000-000000000000'; inheritableScopes = [pscustomobject]@{ kind = 'allAllowed' } }) }
+    }
+
+    It 'declares the role, assigns it to the blueprint principal and keeps scope inheritance' {
+        InModuleScope AgentMgmt { $null = Grant-AmBlueprintAppRole -BlueprintId 'bp-obj' -ResourceAppId '00000003-0000-0000-c000-000000000000' -Roles 'User.Read.All' }
+        Should -Invoke -ModuleName AgentMgmt Add-AmBlueprintRequiredAccess -ParameterFilter { $Type -eq 'Role' -and $PermissionId -eq 'r1' }
+        Should -Invoke -ModuleName AgentMgmt Grant-AmAppRole -ParameterFilter { $SpId -eq 'princ' -and $RoleName -eq 'User.Read.All' }
+        Should -Invoke -ModuleName AgentMgmt Set-AmInheritablePermission -ParameterFilter { $Scopes -eq 'allAllowed' -and $Roles -eq 'allAllowed' }
+    }
+
+    It 'refuses a blocked role before calling Graph writes' {
+        { InModuleScope AgentMgmt { Grant-AmBlueprintAppRole -BlueprintId 'bp-obj' -ResourceAppId '00000003-0000-0000-c000-000000000000' -Roles 'User.ReadWrite.All' } } | Should -Throw
+        Should -Invoke -ModuleName AgentMgmt Grant-AmAppRole -Times 0
+    }
+}
+
+Describe 'Credentials' {
+    It 'reads secrets from the plain application route' {
+        Mock -ModuleName AgentMgmt Invoke-AmGraph {
+            [pscustomobject]@{ passwordCredentials = @([pscustomobject]@{ keyId = 'k1'; displayName = 's1'; hint = 'abc'; endDateTime = '2099-01-01T00:00:00Z' }); keyCredentials = @() }
+        }
+        $r = InModuleScope AgentMgmt { Get-AmBlueprintCredentials -BlueprintId 'bp1' }
+        @($r).Count | Should -Be 1
+        $r[0].Name | Should -Be 's1'
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -ParameterFilter { $Path -like '/applications/bp1?*passwordCredentials*' }
+    }
+}
+
 Describe 'Blocked-for-agents list' {
     It 'blocks User.ReadWrite.All for application and delegated' {
         InModuleScope AgentMgmt {

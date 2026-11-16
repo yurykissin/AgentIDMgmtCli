@@ -65,6 +65,7 @@ Microsoft blocks some permissions for agent identities, for example `User.ReadWr
 ./agentmgmt.ps1 -Command perms --agent "n8n write agent"
 ./agentmgmt.ps1 -Command agent-grant --agent "n8n write agent" --permission User.ReadUpdate.All -DryRun
 ./agentmgmt.ps1 -Command bp-grant --blueprint "n8n-lab Blueprint" --permission User.Read
+./agentmgmt.ps1 -Command bp-grant --blueprint "n8n-lab Blueprint" --permission User.Read.All --type application
 ./agentmgmt.ps1 -Command agent-delete --agent zz-test-agent --yes
 ```
 

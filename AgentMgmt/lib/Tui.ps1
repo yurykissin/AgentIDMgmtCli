@@ -223,8 +223,8 @@ function Invoke-AmBlueprintPermissionMenu {
     while ($true) {
         Write-AmHeader "Permissions on blueprint '$($Bp.displayName)'"
         Write-Host ' 1) Show permissions'
-        Write-Host ' 2) Grant delegated permission (flows to all agents when inheritable)'
-        Write-Host ' 3) Revoke delegated permission'
+        Write-Host ' 2) Add permission (e.g. User.Read.All; delegated or application; flows to agents when inheritable)'
+        Write-Host ' 3) Remove permission'
         Write-Host ' 4) Inheritance settings for a resource'
         Write-Host ' 5) Remove inheritance for a resource'
         Write-Host ' 0) Back'
@@ -233,16 +233,24 @@ function Invoke-AmBlueprintPermissionMenu {
             '2' {
                 Invoke-AmUi {
                     $res = Select-AmResourceUi
-                    $perms = @(Select-AmPermissionsUi -ResourceAppId $res.appId -Type Delegated)
+                    $kind = Read-AmLine 'Permission type: (d)elegated = on behalf of a user, (a)pplication = app-only' 'd'
+                    $isApp = $kind.Trim().ToLower().StartsWith('a')
+                    $type = if ($isApp) { 'Application' } else { 'Delegated' }
+                    $perms = @(Select-AmPermissionsUi -ResourceAppId $res.appId -Type $type)
                     if ($perms.Count -eq 0) { return }
-                    if (-not (Confirm-AmRisk $perms 'Delegated')) { return }
-                    $inherit = Confirm-AmYesNo 'Let agent identities inherit these scopes?' $true
-                    $r = Grant-AmBlueprintDelegated -BlueprintId $Bp.id -ResourceAppId $res.appId -Scopes @($perms.Name) -Inherit $inherit
-                    if ($r) {
-                        if ($r.Consent -eq 'granted') { Write-AmLine 'Done: consent granted on the blueprint principal.' 'Green' }
-                        else {
-                            Write-AmLine 'The signed-in user could not grant consent. Send this URL to a Global Administrator:' 'Yellow'
-                            Write-AmLine "  $($r.AdminConsentUrl)" 'White'
+                    if (-not (Confirm-AmRisk $perms $type)) { return }
+                    $inherit = Confirm-AmYesNo 'Let agent identities inherit these permissions?' $true
+                    if ($isApp) {
+                        $null = Grant-AmBlueprintAppRole -BlueprintId $Bp.id -ResourceAppId $res.appId -Roles @($perms.Name) -Inherit $inherit
+                        Write-AmLine "Done: $(@($perms.Name) -join ', ') granted to the blueprint principal." 'Green'
+                    } else {
+                        $r = Grant-AmBlueprintDelegated -BlueprintId $Bp.id -ResourceAppId $res.appId -Scopes @($perms.Name) -Inherit $inherit
+                        if ($r) {
+                            if ($r.Consent -eq 'granted') { Write-AmLine 'Done: consent granted on the blueprint principal.' 'Green' }
+                            else {
+                                Write-AmLine 'The signed-in user could not grant consent. Send this URL to a Global Administrator:' 'Yellow'
+                                Write-AmLine "  $($r.AdminConsentUrl)" 'White'
+                            }
                         }
                     }
                 }
@@ -251,12 +259,22 @@ function Invoke-AmBlueprintPermissionMenu {
                 Invoke-AmUi {
                     $principal = Get-AmBlueprintPrincipal -BlueprintAppId $Bp.appId
                     if (-not $principal) { throw 'Blueprint principal missing.' }
-                    $g = Read-AmPick 'Delegated grants:' @(Get-AmDelegatedGrants -SpId $principal.id) { param($x) "$($x.Resource): $($x.Scopes -join ', ')" }
-                    if (-not $g) { return }
-                    $scopes = @(Read-AmMulti 'Scopes to revoke:' $g.Scopes { param($s) $s })
-                    if ($scopes.Count -eq 0) { return }
-                    Revoke-AmBlueprintDelegated -BlueprintId $Bp.id -ResourceAppId $g.ResourceAppId -Scopes $scopes
-                    Write-AmLine 'Revoked.' 'Green'
+                    $items = @()
+                    foreach ($g in @(Get-AmDelegatedGrants -SpId $principal.id)) {
+                        foreach ($s in $g.Scopes) { $items += [pscustomobject]@{ Type = 'Delegated'; Resource = $g.Resource; ResourceAppId = $g.ResourceAppId; Name = $s } }
+                    }
+                    foreach ($a in @(Get-AmAppRoleAssignments -SpId $principal.id)) {
+                        $items += [pscustomobject]@{ Type = 'Application'; Resource = $a.Resource; ResourceAppId = $a.ResourceAppId; Name = $a.Role }
+                    }
+                    $sel = @(Read-AmMulti 'Granted permissions:' $items { param($x) ('{0,-12} {1}: {2}' -f $x.Type, $x.Resource, $x.Name) })
+                    if ($sel.Count -eq 0) { return }
+                    if (-not (Confirm-AmYesNo "Remove $($sel.Count) permission(s)?")) { return }
+                    foreach ($grp in ($sel | Group-Object Type, ResourceAppId)) {
+                        $first = $grp.Group[0]
+                        if ($first.Type -eq 'Delegated') { Revoke-AmBlueprintDelegated -BlueprintId $Bp.id -ResourceAppId $first.ResourceAppId -Scopes @($grp.Group.Name) }
+                        else { Revoke-AmBlueprintAppRole -BlueprintId $Bp.id -ResourceAppId $first.ResourceAppId -Roles @($grp.Group.Name) }
+                    }
+                    Write-AmLine 'Removed.' 'Green'
                 }
             }
             '4' {
@@ -353,10 +371,16 @@ function Invoke-AmPeopleMenu {
         if ($c -eq '0') { return }
         if (-not $rel) { continue }
         Invoke-AmUi {
-            $q = Read-AmLine 'User (UPN, name prefix, or object id)'
-            $user = Find-AmUser -Search $q
-            if ($c -in '1', '3') { Add-AmRelation -Kind $Kind -Id $Obj.id -UserId $user.id -Relation $rel }
-            else { Remove-AmRelation -Kind $Kind -Id $Obj.id -UserId $user.id -Relation $rel }
+            if ($c -in '1', '3') {
+                $q = Read-AmLine 'User (UPN, name prefix, or object id)'
+                $user = Find-AmUser -Search $q
+                Add-AmRelation -Kind $Kind -Id $Obj.id -UserId $user.id -Relation $rel
+            } else {
+                $current = @(Get-AmRelation -Kind $Kind -Id $Obj.id -Relation $rel)
+                $user = Read-AmPick "Remove which $($rel.TrimEnd('s'))?" $current { param($x) "$($x.displayName) <$($x.userPrincipalName)>" }
+                if (-not $user) { return }
+                Remove-AmRelation -Kind $Kind -Id $Obj.id -UserId $user.id -Relation $rel
+            }
             Write-AmLine 'Done.' 'Green'
         }
     }
@@ -366,13 +390,18 @@ function Invoke-AmCredentialMenu {
     param($Bp)
     while ($true) {
         Write-AmHeader "Credentials of blueprint '$($Bp.displayName)'"
-        try {
-            foreach ($c in @(Get-AmBlueprintCredentials -BlueprintId $Bp.id)) {
-                $color = if ($c.Expired) { 'Red' } elseif ($c.DaysLeft -lt 30) { 'Yellow' } else { 'Gray' }
-                Write-AmLine ("  {0,-11} {1,-20} expires {2:yyyy-MM-dd} ({3} days)  keyId={4}" -f $c.Kind, $c.Name, $c.Expires, $c.DaysLeft, $c.KeyId) $color
-            }
-            foreach ($f in @(Get-AmFederatedCredentials -BlueprintId $Bp.id)) { Write-Host "  Federated   $($f.name)  issuer=$($f.issuer)  subject=$($f.subject)  id=$($f.id)" }
-        } catch { Write-AmLine "  (cannot read: $($_.Exception.Message -replace "`n.*", ''))" 'Yellow' }
+        $creds = @()
+        $fed = @()
+        try { $creds = @(Get-AmBlueprintCredentials -BlueprintId $Bp.id) } catch { Write-AmLine "  (cannot read secrets/certificates: $($_.Exception.Message -replace "`n.*", ''))" 'Yellow' }
+        try { $fed = @(Get-AmFederatedCredentials -BlueprintId $Bp.id) } catch { Write-AmLine "  (cannot read federated credentials: $($_.Exception.Message -replace "`n.*", ''))" 'Yellow' }
+        if ($creds.Count -eq 0 -and $fed.Count -eq 0) { Write-AmLine '  (no secrets, certificates or federated credentials)' 'DarkGray' }
+        foreach ($c in $creds) {
+            $color = if ($c.Expired) { 'Red' } elseif ($c.DaysLeft -lt 30) { 'Yellow' } else { 'Gray' }
+            $label = if ($c.Name) { $c.Name } else { '(unnamed)' }
+            $state = if ($c.Expired) { 'EXPIRED' } else { "$($c.DaysLeft) days left" }
+            Write-AmLine ("  {0,-11} {1,-22} hint={2,-5} expires {3:yyyy-MM-dd} ({4})  keyId={5}" -f $c.Kind, $label, $c.Hint, $c.Expires, $state, $c.KeyId) $color
+        }
+        foreach ($f in $fed) { Write-Host "  Federated   $($f.name)  issuer=$($f.issuer)  subject=$($f.subject)  id=$($f.id)" }
         Write-Host ' 1) New client secret   2) Remove secret   3) Add federated credential   4) Remove federated credential   0) Back'
         switch (Read-Host 'Choose') {
             '1' {

@@ -2,7 +2,8 @@
 
 function Get-AmBlueprintCredentials {
     param([Parameter(Mandatory)][string]$BlueprintId)
-    $bp = Invoke-AmGraph -Method GET -Path "$(Get-AmObjectRoute Blueprint $BlueprintId)?`$select=id,displayName,passwordCredentials,keyCredentials"
+    # The plain application route is used for reading: it always returns the credential collections.
+    $bp = Invoke-AmGraph -Method GET -Path "/applications/$BlueprintId`?`$select=id,displayName,passwordCredentials,keyCredentials"
     $now = (Get-Date).ToUniversalTime()
     $rows = New-Object System.Collections.ArrayList
     foreach ($p in @($bp.passwordCredentials)) {

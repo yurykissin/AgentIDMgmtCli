@@ -266,6 +266,56 @@ function Revoke-AmBlueprintDelegated {
     }
 }
 
+function Grant-AmBlueprintAppRole {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$BlueprintId,
+        [Parameter(Mandatory)][string]$ResourceAppId,
+        [Parameter(Mandatory)][string[]]$Roles,
+        [bool]$Inherit = $true,
+        [switch]$SkipBlockCheck
+    )
+    $bp = Invoke-AmGraph -Method GET -Path "$(Get-AmObjectRoute Blueprint $BlueprintId)?`$select=id,appId,displayName"
+    $principal = Get-AmBlueprintPrincipal -BlueprintAppId $bp.appId
+    if (-not $principal) { throw "Blueprint '$($bp.displayName)' has no blueprint principal in this tenant." }
+    $res = Get-AmResourceSp -ResourceAppId $ResourceAppId
+
+    foreach ($roleName in $Roles) {
+        Assert-AmPermissionAllowed -Name $roleName -Type Application -Target 'agent identities (blueprint permissions flow to them)' -SkipBlockCheck:$SkipBlockCheck
+        $def = @($res.appRoles | Where-Object { $_.value -ieq $roleName -and $_.isEnabled -and ($_.allowedMemberTypes -contains 'Application') }) | Select-Object -First 1
+        if (-not $def) { throw "Application permission '$roleName' does not exist on $($res.displayName)." }
+        Add-AmBlueprintRequiredAccess -BlueprintId $BlueprintId -ResourceAppId $ResourceAppId -PermissionId $def.id -Type Role
+        $null = Grant-AmAppRole -SpId $principal.id -ResourceAppId $ResourceAppId -RoleName $roleName -Target 'agent identities (blueprint permissions flow to them)' -SkipBlockCheck:$SkipBlockCheck
+    }
+
+    if ($Inherit) {
+        $current = @(Get-AmInheritablePermissions -BlueprintId $BlueprintId) | Where-Object { $_.resourceAppId -eq $ResourceAppId } | Select-Object -First 1
+        $scopes = if ($current -and $current.inheritableScopes -and $current.inheritableScopes.kind -eq 'allAllowed') { 'allAllowed' } else { 'none' }
+        $null = Set-AmInheritablePermission -BlueprintId $BlueprintId -ResourceAppId $ResourceAppId -Scopes $scopes -Roles allAllowed
+    }
+    return [pscustomobject]@{ Blueprint = $bp.displayName; Resource = $res.displayName; Roles = $Roles; Inherited = $Inherit }
+}
+
+function Revoke-AmBlueprintAppRole {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$BlueprintId,
+        [Parameter(Mandatory)][string]$ResourceAppId,
+        [Parameter(Mandatory)][string[]]$Roles
+    )
+    $bp = Invoke-AmGraph -Method GET -Path "$(Get-AmObjectRoute Blueprint $BlueprintId)?`$select=id,appId,displayName"
+    $principal = Get-AmBlueprintPrincipal -BlueprintAppId $bp.appId
+    $res = Get-AmResourceSp -ResourceAppId $ResourceAppId
+    foreach ($roleName in $Roles) {
+        if ($principal) {
+            $hit = @(Get-AmAppRoleAssignments -SpId $principal.id) | Where-Object { $_.ResourceAppId -eq $ResourceAppId -and $_.Role -ieq $roleName } | Select-Object -First 1
+            if ($hit) { Revoke-AmAppRole -SpId $principal.id -AssignmentId $hit.AssignmentId }
+        }
+        $def = $res.appRoles | Where-Object { $_.value -ieq $roleName } | Select-Object -First 1
+        if ($def) { Remove-AmBlueprintRequiredAccess -BlueprintId $BlueprintId -ResourceAppId $ResourceAppId -PermissionId $def.id }
+    }
+}
+
 # ---- Effective permissions ----------------------------------------------
 
 function Get-AmEffectivePermissions {

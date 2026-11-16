@@ -32,7 +32,7 @@ Commands (all accept --dry-run via the -DryRun switch of agentmgmt.ps1):
   agent-enable --agent X | agent-disable --agent X
   perms --agent X                           effective permissions (inherited + direct)
   bp-perms --blueprint X                    permissions declared/consented/inheritable
-  bp-grant --blueprint X --permission P[,P2] [--resource R] [--no-inherit]
+  bp-grant --blueprint X --permission P[,P2] [--type delegated|application] [--resource R] [--no-inherit]
   agent-grant --agent X --permission P [--type application|delegated] [--resource R]
   secret-new --blueprint X [--name N] [--days 90]
   register --agent X [--name N]
@@ -82,8 +82,11 @@ function Invoke-AmCommand {
         'bp-grant' {
             $bp = & $resolveBp
             $res = & $resource
-            $scopes = @((Get-AmOpt $Options 'permission' -Required).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-            Grant-AmBlueprintDelegated -BlueprintId $bp.id -ResourceAppId $res.appId -Scopes $scopes -Inherit:(-not $Options.ContainsKey('no-inherit'))
+            $perms = @((Get-AmOpt $Options 'permission' -Required).Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $type = Get-AmOpt $Options 'type'
+            $inherit = -not $Options.ContainsKey('no-inherit')
+            if ($type -ieq 'application') { Grant-AmBlueprintAppRole -BlueprintId $bp.id -ResourceAppId $res.appId -Roles $perms -Inherit:$inherit }
+            else { Grant-AmBlueprintDelegated -BlueprintId $bp.id -ResourceAppId $res.appId -Scopes $perms -Inherit:$inherit }
         }
         'agent-grant' {
             $a = & $resolveAgent
