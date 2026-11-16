@@ -172,6 +172,14 @@ Describe 'Direct application permissions' {
 }
 
 Describe 'Helpers' {
+    It 'renders the signed-in account as text, not a hashtable dump' {
+        InModuleScope AgentMgmt {
+            $script:State.Account = [pscustomobject]@{ Name = 'A B'; Upn = 'a@b.c'; Oid = 'o'; TenantId = 't'; ClientId = 'c' }
+            Get-AmAccountLabel | Should -Be 'A B <a@b.c>'
+            $script:State.Account = $null
+            Get-AmAccountLabel | Should -Be 'not signed in'
+        }
+    }
     It 'Select-AmMatch resolves by id, exact name and unique fragment, and rejects ambiguity' {
         InModuleScope AgentMgmt {
             $items = @(

@@ -5,12 +5,21 @@ function Write-AmLine {
     Write-Host $Text -ForegroundColor $Color
 }
 
+function Get-AmAccountLabel {
+    $a = $script:State.Account
+    if (-not $a) { return 'not signed in' }
+    $id = if ($a.Upn) { $a.Upn } else { $a.Oid }
+    if ($a.Name -and $id) { return "$($a.Name) <$id>" }
+    if ($id) { return [string]$id }
+    return [string]$a.Name
+}
+
 function Write-AmHeader {
     param([string]$Title)
     Write-Host ''
     Write-Host ('=' * 72) -ForegroundColor DarkCyan
     Write-Host " Agent ID Admin Toolkit - $Title" -ForegroundColor Cyan
-    $who = if ($script:State.Account) { $script:State.Account } else { 'not signed in' }
+    $who = Get-AmAccountLabel
     $tenant = if ($script:State.TenantId) { $script:State.TenantId } else { '-' }
     $mode = if ($script:State.DryRun) { '  [DRY-RUN: changes are only printed]' } else { '' }
     Write-Host " $who | tenant $tenant$mode" -ForegroundColor $(if ($script:State.DryRun) { 'Yellow' } else { 'DarkGray' })
@@ -542,7 +551,7 @@ function Invoke-AmSettingsMenu {
         Write-Host ' 7) Run diagnostics (read-only)   8) Delete toolkit app   0) Back'
         switch (Read-Host 'Choose') {
             '1' { Invoke-AmUi { [void](Initialize-AmToolkitApp -Force:(Confirm-AmYesNo 'Re-create even if already configured?')) } }
-            '2' { Invoke-AmUi { [void](Connect-AmSession); Write-AmLine "Signed in as $($script:State.Account)" 'Green' } }
+            '2' { Invoke-AmUi { [void](Connect-AmSession); Write-AmLine "Signed in as $(Get-AmAccountLabel)" 'Green' } }
             '3' { Invoke-AmUi { Disconnect-AmSession; Write-AmLine 'Signed out.' 'Green' } }
             '4' { $script:State.DryRun = -not $script:State.DryRun }
             '5' { $script:State.Remember = -not $script:State.Remember; Save-AmConfig }
@@ -584,9 +593,10 @@ function Start-AmTui {
     param()
     while ($true) {
         Write-AmHeader 'Main menu'
-        Write-Host ' 1) Browse tree         2) Browse tree with permissions'
-        Write-Host ' 3) Manage a blueprint  4) Manage an agent identity'
-        Write-Host ' 5) Create              6) Agent Registry'
+        Write-Host ' 1) Browse tree   2) Browse tree with permissions'
+        Write-Host ' 3) Manage a blueprint        (permissions, credentials, rename, DELETE)'
+        Write-Host ' 4) Manage an agent identity  (permissions, rename, enable/disable, DELETE)'
+        Write-Host ' 5) Create blueprint / agent identity   6) Agent Registry'
         Write-Host ' 7) Settings / diagnostics   0) Quit'
         switch (Read-Host 'Choose') {
             '1' { Invoke-AmUi { Show-AmTree } }

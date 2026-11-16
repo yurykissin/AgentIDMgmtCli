@@ -61,7 +61,7 @@ function Invoke-AmCommand {
         'tree' { Show-AmTree -Detailed:($Options.ContainsKey('detailed')) }
         'diagnose' { Invoke-AmDiagnose }
         'setup' { [void](Initialize-AmToolkitApp -Force:($Options.ContainsKey('force'))) }
-        'login' { [void](Connect-AmSession); "Signed in as $($script:State.Account)" }
+        'login' { [void](Connect-AmSession); "Signed in as $(Get-AmAccountLabel)" }
         'logout' { Disconnect-AmSession }
         'bp-list' { Get-AmBlueprints | Select-Object displayName, appId, id }
         'agent-list' {
