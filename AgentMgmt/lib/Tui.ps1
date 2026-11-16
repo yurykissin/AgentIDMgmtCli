@@ -14,17 +14,66 @@ function Get-AmAccountLabel {
     return [string]$a.Name
 }
 
+$script:AmWidth = 72
+
+# Screen header: product name, where you are (breadcrumb), who you are, which tenant.
 function Write-AmHeader {
     param([string]$Title)
+    $w = $script:AmWidth
     Write-Host ''
-    Write-Host ('=' * 72) -ForegroundColor DarkCyan
-    Write-Host " Agent ID Admin Toolkit - $Title" -ForegroundColor Cyan
-    $who = Get-AmAccountLabel
+    Write-Host ('=' * $w) -ForegroundColor DarkCyan
+    Write-Host '  AGENT ID ADMIN TOOLKIT' -ForegroundColor Cyan -NoNewline
+    if ($script:State.DryRun) { Write-Host '   [DRY-RUN: changes are only printed]' -ForegroundColor Yellow } else { Write-Host '' }
+    Write-Host "  $Title" -ForegroundColor White
+    Write-Host ('-' * $w) -ForegroundColor DarkCyan
+    $signedIn = [bool]$script:State.Account
     $tenant = if ($script:State.TenantId) { $script:State.TenantId } else { '-' }
-    $mode = if ($script:State.DryRun) { '  [DRY-RUN: changes are only printed]' } else { '' }
-    Write-Host " $who | tenant $tenant$mode" -ForegroundColor $(if ($script:State.DryRun) { 'Yellow' } else { 'DarkGray' })
-    Write-Host ('=' * 72) -ForegroundColor DarkCyan
+    Write-Host ('  {0,-10} ' -f 'Signed in') -ForegroundColor DarkGray -NoNewline
+    Write-Host (Get-AmAccountLabel) -ForegroundColor $(if ($signedIn) { 'Green' } else { 'Yellow' })
+    Write-Host ('  {0,-10} ' -f 'Tenant') -ForegroundColor DarkGray -NoNewline
+    Write-Host $tenant -ForegroundColor Gray
+    Write-Host ('=' * $w) -ForegroundColor DarkCyan
 }
+
+# A heading inside a screen:  "-- Title ------------"
+function Write-AmSection {
+    param([string]$Title, [string]$Color = 'Cyan')
+    $pad = [Math]::Max(3, $script:AmWidth - $Title.Length - 6)
+    Write-Host ''
+    Write-Host ("  -- $Title " + ('-' * $pad)) -ForegroundColor $Color
+}
+
+# "  Label        value" with the label dimmed so values line up.
+function Write-AmKv {
+    param([string]$Label, [string]$Value, [string]$Color = 'Gray', [int]$Width = 12, [string]$Indent = '  ')
+    Write-Host ("$Indent{0,-$Width} " -f $Label) -ForegroundColor DarkGray -NoNewline
+    Write-Host $Value -ForegroundColor $Color
+}
+
+function New-AmMenuItem {
+    param([string]$Key, [string]$Text, [string]$Hint = '', [switch]$Danger)
+    [pscustomobject]@{ Key = $Key; Text = $Text; Hint = $Hint; Danger = [bool]$Danger }
+}
+
+# Grouped menu: each section is @{ Title = '...'; Items = @(New-AmMenuItem ...) }; 0 is always the exit row.
+function Write-AmMenu {
+    param([object[]]$Sections, [string]$ExitText = 'Back')
+    foreach ($s in $Sections) {
+        Write-Host ''
+        if ($s.Title) { Write-Host ("  {0}" -f $s.Title.ToUpper()) -ForegroundColor Cyan }
+        foreach ($i in $s.Items) {
+            Write-Host ('   {0,2}  ' -f $i.Key) -ForegroundColor Yellow -NoNewline
+            Write-Host $i.Text -ForegroundColor $(if ($i.Danger) { 'Red' } else { 'White' }) -NoNewline:([bool]$i.Hint)
+            if ($i.Hint) { Write-Host (' ' * [Math]::Max(1, 35 - $i.Text.Length)) -NoNewline; Write-Host $i.Hint -ForegroundColor DarkGray }
+        }
+    }
+    Write-Host ''
+    Write-Host ('   {0,2}  ' -f '0') -ForegroundColor Yellow -NoNewline
+    Write-Host $ExitText -ForegroundColor DarkGray
+    Write-Host ('-' * $script:AmWidth) -ForegroundColor DarkCyan
+}
+
+function Read-AmChoice { return (Read-Host '  Select') }
 
 function Read-AmLine {
     param([string]$Prompt, [string]$Default)
@@ -56,11 +105,12 @@ function Read-AmPick {
     param([string]$Title, [object[]]$Items, [scriptblock]$Label, [switch]$AllowBack)
     $Items = @($Items)
     if ($Items.Count -eq 0) { Write-AmLine '  (nothing to choose from)' 'Yellow'; return $null }
-    Write-AmLine $Title 'White'
+    Write-AmSection $Title 'White'
     for ($i = 0; $i -lt $Items.Count; $i++) {
-        $text = & $Label $Items[$i]
-        Write-Host ('  {0,2}) {1}' -f ($i + 1), $text)
+        Write-Host ('   {0,2}  ' -f ($i + 1)) -ForegroundColor Yellow -NoNewline
+        Write-Host (& $Label $Items[$i])
     }
+    Write-Host ''
     while ($true) {
         $v = Read-Host '  Number (blank to cancel)'
         if ([string]::IsNullOrWhiteSpace($v)) { return $null }
@@ -74,8 +124,12 @@ function Read-AmMulti {
     param([string]$Title, [object[]]$Items, [scriptblock]$Label)
     $Items = @($Items)
     if ($Items.Count -eq 0) { Write-AmLine '  (nothing to choose from)' 'Yellow'; return @() }
-    Write-AmLine $Title 'White'
-    for ($i = 0; $i -lt $Items.Count; $i++) { Write-Host ('  {0,2}) {1}' -f ($i + 1), (& $Label $Items[$i])) }
+    Write-AmSection $Title 'White'
+    for ($i = 0; $i -lt $Items.Count; $i++) {
+        Write-Host ('   {0,2}  ' -f ($i + 1)) -ForegroundColor Yellow -NoNewline
+        Write-Host (& $Label $Items[$i])
+    }
+    Write-Host ''
     $v = Read-Host '  Numbers separated by commas (blank to cancel)'
     if ([string]::IsNullOrWhiteSpace($v)) { return @() }
     $out = @()
@@ -103,18 +157,26 @@ function Format-AmBlock {
     switch ($Status) { 'Blocked' { return '[BLOCKED for agents]' } 'Unclear' { return '[unclear]' } default { return '' } }
 }
 
+function Get-AmResourceName {
+    param([string]$ResourceAppId)
+    try { $r = Get-AmResourceSp -ResourceAppId $ResourceAppId; if ($r.displayName) { return [string]$r.displayName } } catch { }
+    return $ResourceAppId
+}
+
 function Show-AmEffective {
-    param([string]$IdentityId)
+    param([string]$IdentityId, [string]$Indent = '  ')
     $rows = @(Get-AmEffectivePermissions -IdentityId $IdentityId)
-    if ($rows.Count -eq 0) { Write-AmLine '  No permissions (direct or inherited).' 'Yellow'; return }
+    if ($rows.Count -eq 0) { Write-AmLine "$Indent(no permissions, direct or inherited)" 'DarkGray'; return }
     foreach ($group in ($rows | Group-Object Source)) {
-        Write-AmLine "  $($group.Name)" 'Cyan'
-        foreach ($r in ($group.Group | Sort-Object Resource, Permission)) {
-            Write-Host ("    {0,-12} {1}  ({2})" -f $r.Type, $r.Permission, $r.Resource)
+        Write-AmLine "$Indent$($group.Name)" 'Cyan'
+        foreach ($r in ($group.Group | Sort-Object Resource, Type, Permission)) {
+            $color = if ($r.Type -eq 'Application') { 'Magenta' } else { 'Gray' }
+            Write-AmLine ("$Indent  {0,-12} {1,-34} {2}" -f $r.Type, $r.Permission, $r.Resource) $color
         }
     }
 }
 
+# Tree legend: [B] blueprint, [A] agent identity. -Detailed adds the permissions under each node.
 function Show-AmTree {
     [CmdletBinding()]
     param([switch]$Detailed)
@@ -122,51 +184,68 @@ function Show-AmTree {
     $principals = @(Get-AmBlueprintPrincipals)
     $identities = @(Get-AmIdentities)
     $regs = Get-AmRegistrations
-    if ($null -eq $regs) { Write-AmLine "Agent Registry: unknown ($($script:State.RegistryError))" 'Yellow' }
-    if ($bps.Count -eq 0) { Write-AmLine 'No blueprints in this tenant.' 'Yellow' }
+    if ($null -eq $regs) { Write-AmLine "  Agent Registry: unknown ($($script:State.RegistryError))" 'DarkYellow' }
+    Write-AmLine '  [B] blueprint   [A] agent identity' 'DarkGray'
+    if ($bps.Count -eq 0) { Write-AmLine '  No blueprints in this tenant.' 'Yellow' }
     foreach ($bp in $bps) {
         $principal = $principals | Where-Object { $_.appId -eq $bp.appId } | Select-Object -First 1
         $kids = @($identities | Where-Object { $_.agentIdentityBlueprintId -eq $bp.appId })
-        $pText = if ($principal) { 'principal OK' } else { 'NO PRINCIPAL (blueprint unusable until created)' }
-        Write-AmLine "BLUEPRINT  $($bp.displayName)  appId=$($bp.appId)  [$pText]" 'Green'
+        Write-Host ''
+        Write-Host '  [B] ' -ForegroundColor Green -NoNewline
+        Write-Host $bp.displayName -ForegroundColor Green -NoNewline
+        if ($principal) { Write-Host '   principal OK' -ForegroundColor DarkGray } else { Write-Host '   NO PRINCIPAL (unusable until created)' -ForegroundColor Red }
+        Write-Host "      appId $($bp.appId)" -ForegroundColor DarkGray
         if ($Detailed) {
             try {
                 foreach ($inh in @(Get-AmInheritablePermissions -BlueprintId $bp.id)) {
-                    Write-AmLine ("   inheritable: {0}  scopes={1} roles={2}" -f $inh.resourceAppId, $inh.inheritableScopes.kind, $inh.inheritableRoles.kind) 'DarkGray'
+                    Write-AmLine ("      inheritable  {0}: scopes={1}, roles={2}" -f (Get-AmResourceName $inh.resourceAppId), $inh.inheritableScopes.kind, $inh.inheritableRoles.kind) 'DarkGray'
                 }
                 if ($principal) {
-                    foreach ($g in @(Get-AmDelegatedGrants -SpId $principal.id)) { Write-AmLine ("   consented (delegated): {0} -> {1}" -f $g.Resource, ($g.Scopes -join ', ')) 'DarkGray' }
+                    foreach ($g in @(Get-AmDelegatedGrants -SpId $principal.id)) { Write-AmLine ("      consented    {0}: {1} (delegated)" -f $g.Resource, ($g.Scopes -join ', ')) 'DarkGray' }
+                    foreach ($a in @(Get-AmAppRoleAssignments -SpId $principal.id)) { Write-AmLine ("      consented    {0}: {1} (application)" -f $a.Resource, $a.Role) 'DarkGray' }
                 }
-            } catch { Write-AmLine "   (could not read blueprint permissions: $($_.Exception.Message -replace "`n.*", ''))" 'DarkYellow' }
+            } catch { Write-AmLine "      (could not read blueprint permissions: $($_.Exception.Message -replace "`n.*", ''))" 'DarkYellow' }
         }
-        if ($kids.Count -eq 0) { Write-AmLine '   (no agent identities)' 'DarkGray' }
-        foreach ($k in $kids) {
-            $state = if ($k.accountEnabled -eq $false) { 'disabled' } else { 'enabled' }
-            $reg = if ($null -eq $regs) { 'registry: unknown' } else {
+        if ($kids.Count -eq 0) { Write-AmLine '      (no agent identities)' 'DarkGray' }
+        for ($n = 0; $n -lt $kids.Count; $n++) {
+            $k = $kids[$n]
+            $last = ($n -eq $kids.Count - 1)
+            $branch = if ($last) { '\-- ' } else { '+-- ' }
+            $rail = if ($last) { '    ' } else { '|   ' }
+            $enabled = ($k.accountEnabled -ne $false)
+            $reg = if ($null -eq $regs) { 'registry unknown' } else {
                 $hit = $regs | Where-Object { $_.agentIdentityId -eq $k.id -or $_.sourceAgentId -eq $k.id } | Select-Object -First 1
-                if ($hit) { "registered: $($hit.displayName)" } else { 'not registered' }
+                if ($hit) { "registered as '$($hit.displayName)'" } else { 'not registered' }
             }
-            Write-AmLine "   AGENT  $($k.displayName)  id=$($k.id)  [$state; $reg]" 'White'
+            Write-Host "      $branch" -ForegroundColor DarkGray -NoNewline
+            Write-Host '[A] ' -ForegroundColor White -NoNewline
+            Write-Host $k.displayName -ForegroundColor White -NoNewline
+            Write-Host '   ' -NoNewline
+            Write-Host $(if ($enabled) { 'enabled' } else { 'DISABLED' }) -ForegroundColor $(if ($enabled) { 'DarkGray' } else { 'Yellow' }) -NoNewline
+            Write-Host "; $reg" -ForegroundColor DarkGray
+            Write-AmLine "      $rail    id $($k.id)" 'DarkGray'
             if ($Detailed) {
-                try { Show-AmEffective -IdentityId $k.id } catch { Write-AmLine "     (could not read permissions: $($_.Exception.Message -replace "`n.*", ''))" 'DarkYellow' }
+                try { Show-AmEffective -IdentityId $k.id -Indent "      $rail    " } catch { Write-AmLine "      $rail    (could not read permissions: $($_.Exception.Message -replace "`n.*", ''))" 'DarkYellow' }
             }
         }
     }
     $orphans = @($identities | Where-Object { $bps.appId -notcontains $_.agentIdentityBlueprintId })
-    foreach ($o in $orphans) { Write-AmLine "ORPHAN AGENT  $($o.displayName)  id=$($o.id)  (blueprint not visible)" 'Yellow' }
+    foreach ($o in $orphans) { Write-AmLine "  [A] ORPHAN  $($o.displayName)  id=$($o.id)  (blueprint not visible)" 'Yellow' }
+    Write-Host ''
+    Write-AmLine ("  {0} blueprint(s), {1} agent identit{2}" -f $bps.Count, $identities.Count, $(if ($identities.Count -eq 1) { 'y' } else { 'ies' })) 'DarkGray'
 }
 
 # ---- Pickers -------------------------------------------------------------
 
 function Select-AmBlueprintUi {
     $items = @(Get-AmBlueprints)
-    Read-AmPick 'Blueprints:' $items { param($b) "$($b.displayName)   appId=$($b.appId)" }
+    Read-AmPick 'Choose a blueprint' $items { param($b) ("{0}`n        appId {1}" -f $b.displayName, $b.appId) }
 }
 
 function Select-AmIdentityUi {
     param([string]$BlueprintAppId)
     $items = @(Get-AmIdentities -BlueprintAppId $BlueprintAppId)
-    Read-AmPick 'Agent identities:' $items { param($a) "$($a.displayName)   id=$($a.id)" }
+    Read-AmPick 'Choose an agent identity' $items { param($a) ("{0}`n        id {1}" -f $a.displayName, $a.id) }
 }
 
 function Select-AmPermissionsUi {
@@ -174,9 +253,17 @@ function Select-AmPermissionsUi {
     $search = Read-AmLine 'Search permission name (e.g. User.Read)'
     $rows = @(Find-AmPermission -ResourceAppId $ResourceAppId -Type $Type -Search $search)
     if ($rows.Count -gt 40) { Write-AmLine "  $($rows.Count) matches; showing the first 40. Refine the search to narrow." 'Yellow'; $rows = @($rows | Select-Object -First 40) }
-    $label = { param($p) ('{0,-45} {1,-20} {2}' -f $p.Name, (Format-AmBlock $p.Block), $p.Description) }
-    if ($Single) { $x = Read-AmPick 'Matches:' $rows $label; if ($x) { return @($x) } else { return @() } }
-    return @(Read-AmMulti 'Matches:' $rows $label)
+    $label = {
+        param($p)
+        $tag = Format-AmBlock $p.Block
+        $desc = [string]$p.Description
+        if ($desc.Length -gt 62) { $desc = $desc.Substring(0, 59) + '...' }
+        $head = if ($tag) { '{0}  {1}' -f $p.Name, $tag } else { [string]$p.Name }
+        if ($desc) { "$head`n        $desc" } else { $head }
+    }
+    $title = "$Type permissions matching '$search'"
+    if ($Single) { $x = Read-AmPick $title $rows $label; if ($x) { return @($x) } else { return @() } }
+    return @(Read-AmMulti $title $rows $label)
 }
 
 function Select-AmResourceUi {
@@ -198,37 +285,51 @@ function Confirm-AmRisk {
 
 function Show-AmBlueprintPermissions {
     param($Bp)
-    Write-AmLine "Declared (requiredResourceAccess):" 'Cyan'
-    foreach ($e in @(Get-AmBlueprintRequiredAccess -BlueprintId $Bp.id)) {
+    Write-AmSection 'Declared on the blueprint (requiredResourceAccess)'
+    $declared = @(Get-AmBlueprintRequiredAccess -BlueprintId $Bp.id)
+    if ($declared.Count -eq 0) { Write-AmLine '  (none)' 'DarkGray' }
+    foreach ($e in $declared) {
         $res = Get-AmResourceSp -ResourceAppId $e.resourceAppId
-        $names = @($e.resourceAccess | ForEach-Object {
-                $id = $_.id
-                $n = if ($_.type -eq 'Scope') { ($res.oauth2PermissionScopes | Where-Object { $_.id -eq $id }).value } else { ($res.appRoles | Where-Object { $_.id -eq $id }).value }
-                "$n($($_.type))"
-            })
-        Write-Host "  $($res.displayName): $($names -join ', ')"
+        Write-AmLine "  $($res.displayName)" 'White'
+        foreach ($ra in @($e.resourceAccess)) {
+            $id = $ra.id
+            $n = if ($ra.type -eq 'Scope') { ($res.oauth2PermissionScopes | Where-Object { $_.id -eq $id }).value } else { ($res.appRoles | Where-Object { $_.id -eq $id }).value }
+            $type = if ($ra.type -eq 'Scope') { 'Delegated' } else { 'Application' }
+            Write-AmLine ("    {0,-12} {1}" -f $type, $n) $(if ($type -eq 'Application') { 'Magenta' } else { 'Gray' })
+        }
     }
-    Write-AmLine 'Inheritable by agent identities:' 'Cyan'
-    foreach ($i in @(Get-AmInheritablePermissions -BlueprintId $Bp.id)) { Write-Host ("  {0}: scopes={1} roles={2}" -f $i.resourceAppId, $i.inheritableScopes.kind, $i.inheritableRoles.kind) }
+    Write-AmSection 'Agents may inherit (inheritable permissions)'
+    $inh = @(Get-AmInheritablePermissions -BlueprintId $Bp.id)
+    if ($inh.Count -eq 0) { Write-AmLine '  (nothing is inheritable yet)' 'DarkGray' }
+    else {
+        Write-AmLine ('  {0,-28} {1,-18} {2}' -f 'Resource', 'Delegated scopes', 'Application roles') 'DarkGray'
+        foreach ($i in $inh) { Write-AmLine ('  {0,-28} {1,-18} {2}' -f (Get-AmResourceName $i.resourceAppId), $i.inheritableScopes.kind, $i.inheritableRoles.kind) }
+    }
+    Write-AmSection 'Granted to the blueprint principal (consent / app roles)'
     $principal = Get-AmBlueprintPrincipal -BlueprintAppId $Bp.appId
-    if ($principal) {
-        Write-AmLine 'Consented on the blueprint principal:' 'Cyan'
-        foreach ($g in @(Get-AmDelegatedGrants -SpId $principal.id)) { Write-Host "  delegated  $($g.Resource): $($g.Scopes -join ', ')" }
-        foreach ($a in @(Get-AmAppRoleAssignments -SpId $principal.id)) { Write-Host "  app role   $($a.Resource): $($a.Role)" }
-    } else { Write-AmLine '  Blueprint principal missing.' 'Yellow' }
+    if (-not $principal) { Write-AmLine '  Blueprint principal missing.' 'Yellow'; return }
+    $grants = @(Get-AmDelegatedGrants -SpId $principal.id)
+    $roles = @(Get-AmAppRoleAssignments -SpId $principal.id)
+    if ($grants.Count + $roles.Count -eq 0) { Write-AmLine '  (nothing granted)' 'DarkGray' }
+    foreach ($g in $grants) { Write-AmLine ('  {0,-12} {1}: {2}' -f 'Delegated', $g.Resource, ($g.Scopes -join ', ')) }
+    foreach ($a in $roles) { Write-AmLine ('  {0,-12} {1}: {2}' -f 'Application', $a.Resource, $a.Role) 'Magenta' }
 }
 
 function Invoke-AmBlueprintPermissionMenu {
     param($Bp)
     while ($true) {
-        Write-AmHeader "Permissions on blueprint '$($Bp.displayName)'"
-        Write-Host ' 1) Show permissions'
-        Write-Host ' 2) Add permission (e.g. User.Read.All; delegated or application; flows to agents when inheritable)'
-        Write-Host ' 3) Remove permission'
-        Write-Host ' 4) Inheritance settings for a resource'
-        Write-Host ' 5) Remove inheritance for a resource'
-        Write-Host ' 0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmHeader "Blueprint '$($Bp.displayName)'  >  Permissions"
+        Write-AmMenu -Sections @(
+            @{ Title = 'View'; Items = @(
+                    (New-AmMenuItem '1' 'Show permissions' 'declared, inheritable, granted')) },
+            @{ Title = 'Grant and revoke'; Items = @(
+                    (New-AmMenuItem '2' 'Add permission' 'delegated or application; agents inherit if enabled'),
+                    (New-AmMenuItem '3' 'Remove permission' 'pick from what is granted')) },
+            @{ Title = 'Inheritance by agent identities'; Items = @(
+                    (New-AmMenuItem '4' 'Set inheritance for a resource' 'scopes / roles: allAllowed or none'),
+                    (New-AmMenuItem '5' 'Remove inheritance for a resource' '')) }
+        )
+        switch (Read-AmChoice) {
             '1' { Invoke-AmUi { Show-AmBlueprintPermissions -Bp $Bp } }
             '2' {
                 Invoke-AmUi {
@@ -302,14 +403,18 @@ function Invoke-AmBlueprintPermissionMenu {
 function Invoke-AmIdentityPermissionMenu {
     param($Agent)
     while ($true) {
-        Write-AmHeader "Permissions on agent '$($Agent.displayName)'"
-        Write-Host ' 1) Show effective permissions (inherited + direct)'
-        Write-Host ' 2) Grant direct application permission (this agent only)'
-        Write-Host ' 3) Grant direct delegated permission (this agent only)'
-        Write-Host ' 4) Revoke direct application permission'
-        Write-Host ' 5) Revoke direct delegated permission'
-        Write-Host ' 0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmHeader "Agent '$($Agent.displayName)'  >  Permissions"
+        Write-AmMenu -Sections @(
+            @{ Title = 'View'; Items = @(
+                    (New-AmMenuItem '1' 'Show effective permissions' 'inherited from blueprint + direct')) },
+            @{ Title = 'Grant directly (this agent only)'; Items = @(
+                    (New-AmMenuItem '2' 'Grant application permission' 'app-only, one permission'),
+                    (New-AmMenuItem '3' 'Grant delegated permission' 'on behalf of a user, one or more')) },
+            @{ Title = 'Revoke direct grants'; Items = @(
+                    (New-AmMenuItem '4' 'Revoke application permission' ''),
+                    (New-AmMenuItem '5' 'Revoke delegated permission' '')) }
+        )
+        switch (Read-AmChoice) {
             '1' { Invoke-AmUi { Show-AmEffective -IdentityId $Agent.id } }
             '2' {
                 Invoke-AmUi {
@@ -356,17 +461,29 @@ function Invoke-AmIdentityPermissionMenu {
 function Invoke-AmPeopleMenu {
     param([ValidateSet('Blueprint', 'Identity')][string]$Kind, $Obj)
     while ($true) {
-        Write-AmHeader "Sponsors / owners of '$($Obj.displayName)'"
+        Write-AmHeader "$(if ($Kind -eq 'Blueprint') { 'Blueprint' } else { 'Agent' }) '$($Obj.displayName)'  >  $(if ($Kind -eq 'Blueprint') { 'Sponsors and owners' } else { 'Sponsors' })"
         foreach ($rel in 'sponsors', 'owners') {
             if ($Kind -eq 'Identity' -and $rel -eq 'owners') { continue }
-            Write-AmLine $rel 'Cyan'
-            try { foreach ($u in @(Get-AmRelation -Kind $Kind -Id $Obj.id -Relation $rel)) { Write-Host "  $($u.displayName) <$($u.userPrincipalName)>  $($u.id)" } }
+            Write-AmSection ($rel.Substring(0, 1).ToUpper() + $rel.Substring(1))
+            try {
+                $people = @(Get-AmRelation -Kind $Kind -Id $Obj.id -Relation $rel)
+                if ($people.Count -eq 0) { Write-AmLine '  (none)' 'DarkGray' }
+                foreach ($u in $people) { Write-AmLine ('  {0,-28} {1}' -f $u.displayName, $u.userPrincipalName) }
+            }
             catch { Write-AmLine "  (cannot read: $($_.Exception.Message -replace "`n.*", ''))" 'Yellow' }
         }
-        Write-Host ' 1) Add sponsor   2) Remove sponsor'
-        if ($Kind -eq 'Blueprint') { Write-Host ' 3) Add owner     4) Remove owner' }
-        Write-Host ' 0) Back'
-        $c = Read-Host 'Choose'
+        $items = @(
+            @{ Title = 'Sponsors'; Items = @(
+                    (New-AmMenuItem '1' 'Add sponsor' 'search by UPN or name'),
+                    (New-AmMenuItem '2' 'Remove sponsor' 'pick from the list')) }
+        )
+        if ($Kind -eq 'Blueprint') {
+            $items += @{ Title = 'Owners'; Items = @(
+                    (New-AmMenuItem '3' 'Add owner' 'search by UPN or name'),
+                    (New-AmMenuItem '4' 'Remove owner' 'pick from the list')) }
+        }
+        Write-AmMenu -Sections $items
+        $c = Read-AmChoice
         $rel = if ($c -in '1', '2') { 'sponsors' } elseif ($Kind -eq 'Blueprint' -and $c -in '3', '4') { 'owners' } else { $null }
         if ($c -eq '0') { return }
         if (-not $rel) { continue }
@@ -389,21 +506,37 @@ function Invoke-AmPeopleMenu {
 function Invoke-AmCredentialMenu {
     param($Bp)
     while ($true) {
-        Write-AmHeader "Credentials of blueprint '$($Bp.displayName)'"
+        Write-AmHeader "Blueprint '$($Bp.displayName)'  >  Credentials"
         $creds = @()
         $fed = @()
         try { $creds = @(Get-AmBlueprintCredentials -BlueprintId $Bp.id) } catch { Write-AmLine "  (cannot read secrets/certificates: $($_.Exception.Message -replace "`n.*", ''))" 'Yellow' }
         try { $fed = @(Get-AmFederatedCredentials -BlueprintId $Bp.id) } catch { Write-AmLine "  (cannot read federated credentials: $($_.Exception.Message -replace "`n.*", ''))" 'Yellow' }
-        if ($creds.Count -eq 0 -and $fed.Count -eq 0) { Write-AmLine '  (no secrets, certificates or federated credentials)' 'DarkGray' }
+        Write-AmSection 'Secrets and certificates'
+        if ($creds.Count -eq 0) { Write-AmLine '  (none)' 'DarkGray' }
+        else { Write-AmLine ('  {0,-11} {1,-20} {2,-6} {3,-12} {4}' -f 'Kind', 'Name', 'Hint', 'Expires', 'Status') 'DarkGray' }
         foreach ($c in $creds) {
             $color = if ($c.Expired) { 'Red' } elseif ($c.DaysLeft -lt 30) { 'Yellow' } else { 'Gray' }
             $label = if ($c.Name) { $c.Name } else { '(unnamed)' }
             $state = if ($c.Expired) { 'EXPIRED' } else { "$($c.DaysLeft) days left" }
-            Write-AmLine ("  {0,-11} {1,-22} hint={2,-5} expires {3:yyyy-MM-dd} ({4})  keyId={5}" -f $c.Kind, $label, $c.Hint, $c.Expires, $state, $c.KeyId) $color
+            Write-AmLine ("  {0,-11} {1,-20} {2,-6} {3,-12:yyyy-MM-dd} {4}" -f $c.Kind, $label, $c.Hint, $c.Expires, $state) $color
+            Write-AmLine "              keyId $($c.KeyId)" 'DarkGray'
         }
-        foreach ($f in $fed) { Write-Host "  Federated   $($f.name)  issuer=$($f.issuer)  subject=$($f.subject)  id=$($f.id)" }
-        Write-Host ' 1) New client secret   2) Remove secret   3) Add federated credential   4) Remove federated credential   0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmSection 'Federated credentials'
+        if ($fed.Count -eq 0) { Write-AmLine '  (none)' 'DarkGray' }
+        foreach ($f in $fed) {
+            Write-AmLine "  $($f.name)" 'White'
+            Write-AmKv 'issuer' $f.issuer -Indent '    '
+            Write-AmKv 'subject' $f.subject -Indent '    '
+        }
+        Write-AmMenu -Sections @(
+            @{ Title = 'Client secrets'; Items = @(
+                    (New-AmMenuItem '1' 'New client secret' 'shown once, copy it immediately'),
+                    (New-AmMenuItem '2' 'Remove secret' '' -Danger)) },
+            @{ Title = 'Federated credentials'; Items = @(
+                    (New-AmMenuItem '3' 'Add federated credential' 'issuer + subject'),
+                    (New-AmMenuItem '4' 'Remove federated credential' '' -Danger)) }
+        )
+        switch (Read-AmChoice) {
             '1' {
                 Invoke-AmUi {
                     $name = Read-AmLine 'Secret name' 'agentmgmt'
@@ -446,11 +579,21 @@ function Invoke-AmBlueprintMenu {
     param($Bp)
     while ($true) {
         Write-AmHeader "Blueprint '$($Bp.displayName)'"
-        Write-Host "  appId=$($Bp.appId)  objectId=$($Bp.id)" -ForegroundColor DarkGray
-        Write-Host ' 1) Permissions   2) Credentials   3) Sponsors / owners'
-        Write-Host ' 4) Create agent identity under this blueprint'
-        Write-Host ' 5) Rename   6) Delete (with its agent identities)   0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmKv 'appId' $Bp.appId
+        Write-AmKv 'objectId' $Bp.id
+        Write-AmMenu -Sections @(
+            @{ Title = 'Configure'; Items = @(
+                    (New-AmMenuItem '1' 'Permissions' 'add / remove / inheritance'),
+                    (New-AmMenuItem '2' 'Credentials' 'secrets and federated credentials'),
+                    (New-AmMenuItem '3' 'Sponsors and owners' '')) },
+            @{ Title = 'Agent identities'; Items = @(
+                    (New-AmMenuItem '4' 'Create agent identity' 'under this blueprint')) },
+            @{ Title = 'Manage'; Items = @(
+                    (New-AmMenuItem '5' 'Rename' '')) },
+            @{ Title = 'Danger zone'; Items = @(
+                    (New-AmMenuItem '6' 'Delete blueprint' 'also deletes its agent identities' -Danger)) }
+        )
+        switch (Read-AmChoice) {
             '1' { Invoke-AmBlueprintPermissionMenu -Bp $Bp }
             '2' { Invoke-AmCredentialMenu -Bp $Bp }
             '3' { Invoke-AmPeopleMenu -Kind Blueprint -Obj $Bp }
@@ -490,11 +633,21 @@ function Invoke-AmBlueprintMenu {
 function Invoke-AmIdentityMenu {
     param($Agent)
     while ($true) {
-        Write-AmHeader "Agent identity '$($Agent.displayName)'"
-        Write-Host "  id=$($Agent.id)  appId=$($Agent.appId)" -ForegroundColor DarkGray
-        Write-Host ' 1) Permissions   2) Sponsors   3) Rename   4) Enable / disable'
-        Write-Host ' 5) Register in Agent Registry   6) Delete   0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmHeader "Agent '$($Agent.displayName)'"
+        Write-AmKv 'id' $Agent.id
+        Write-AmKv 'appId' $Agent.appId
+        Write-AmMenu -Sections @(
+            @{ Title = 'Configure'; Items = @(
+                    (New-AmMenuItem '1' 'Permissions' 'effective, grant, revoke'),
+                    (New-AmMenuItem '2' 'Sponsors' '')) },
+            @{ Title = 'Manage'; Items = @(
+                    (New-AmMenuItem '3' 'Rename' ''),
+                    (New-AmMenuItem '4' 'Enable / disable' 'toggles sign-in for this agent'),
+                    (New-AmMenuItem '5' 'Register in Agent Registry' 'beta')) },
+            @{ Title = 'Danger zone'; Items = @(
+                    (New-AmMenuItem '6' 'Delete agent identity' '' -Danger)) }
+        )
+        switch (Read-AmChoice) {
             '1' { Invoke-AmIdentityPermissionMenu -Agent $Agent }
             '2' { Invoke-AmPeopleMenu -Kind Identity -Obj $Agent }
             '3' {
@@ -538,10 +691,23 @@ function Invoke-AmRegistryMenu {
     while ($true) {
         Write-AmHeader 'Agent Registry (beta)'
         $regs = Get-AmRegistrations
-        if ($null -eq $regs) { Write-AmLine "Cannot read the registry: $($script:State.RegistryError)" 'Yellow' }
-        else { foreach ($r in $regs) { Write-Host "  $($r.displayName)  id=$($r.id)  agent=$($r.agentIdentityId)" } }
-        Write-Host ' 1) Register an existing agent identity   2) Rename registration   3) Delete registration   0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmSection 'Registrations'
+        if ($null -eq $regs) { Write-AmLine "  Cannot read the registry: $($script:State.RegistryError)" 'Yellow' }
+        elseif (@($regs).Count -eq 0) { Write-AmLine '  (none)' 'DarkGray' }
+        else {
+            foreach ($r in $regs) {
+                Write-AmLine "  $($r.displayName)" 'White'
+                Write-AmKv 'id' $r.id -Indent '    '
+                Write-AmKv 'agent' $r.agentIdentityId -Indent '    '
+            }
+        }
+        Write-AmMenu -Sections @(
+            @{ Title = 'Actions'; Items = @(
+                    (New-AmMenuItem '1' 'Register an agent identity' 'pick an existing one'),
+                    (New-AmMenuItem '2' 'Rename registration' ''),
+                    (New-AmMenuItem '3' 'Delete registration' 'the agent identity is kept' -Danger)) }
+        )
+        switch (Read-AmChoice) {
             '1' {
                 Invoke-AmUi {
                     $a = Select-AmIdentityUi
@@ -573,12 +739,25 @@ function Invoke-AmRegistryMenu {
 function Invoke-AmSettingsMenu {
     while ($true) {
         Write-AmHeader 'Settings'
-        Write-Host (" Toolkit app: {0}" -f $(if ($script:State.ClientId) { $script:State.ClientId } else { '(not set up)' }))
-        Write-Host (" Remember sign-in: {0}   Dry-run: {1}" -f $script:State.Remember, $script:State.DryRun)
-        Write-Host ' 1) Set up toolkit app (first run)   2) Sign in   3) Sign out'
-        Write-Host ' 4) Toggle dry-run   5) Toggle remember sign-in   6) Show Graph call log'
-        Write-Host ' 7) Run diagnostics (read-only)   8) Delete toolkit app   0) Back'
-        switch (Read-Host 'Choose') {
+        Write-AmSection 'Current state'
+        Write-AmKv 'Toolkit app' $(if ($script:State.ClientId) { $script:State.ClientId } else { '(not set up)' }) $(if ($script:State.ClientId) { 'Gray' } else { 'Yellow' }) 18
+        Write-AmKv 'Remember sign-in' $(if ($script:State.Remember) { 'on' } else { 'off' }) 'Gray' 18
+        Write-AmKv 'Dry-run' $(if ($script:State.DryRun) { 'ON (changes are only printed)' } else { 'off' }) $(if ($script:State.DryRun) { 'Yellow' } else { 'Gray' }) 18
+        Write-AmMenu -Sections @(
+            @{ Title = 'Sign-in'; Items = @(
+                    (New-AmMenuItem '1' 'Set up toolkit app' 'first run: creates the app registration'),
+                    (New-AmMenuItem '2' 'Sign in' ''),
+                    (New-AmMenuItem '3' 'Sign out' '')) },
+            @{ Title = 'Options'; Items = @(
+                    (New-AmMenuItem '4' 'Toggle dry-run' 'print writes instead of sending'),
+                    (New-AmMenuItem '5' 'Toggle remember sign-in' 'keep a refresh token on this machine')) },
+            @{ Title = 'Diagnostics'; Items = @(
+                    (New-AmMenuItem '6' 'Show Graph call log' ''),
+                    (New-AmMenuItem '7' 'Run diagnostics' 'read-only checks')) },
+            @{ Title = 'Danger zone'; Items = @(
+                    (New-AmMenuItem '8' 'Delete toolkit app' 'blueprints are not touched' -Danger)) }
+        )
+        switch (Read-AmChoice) {
             '1' { Invoke-AmUi { [void](Initialize-AmToolkitApp -Force:(Confirm-AmYesNo 'Re-create even if already configured?')) } }
             '2' { Invoke-AmUi { [void](Connect-AmSession); Write-AmLine "Signed in as $(Get-AmAccountLabel)" 'Green' } }
             '3' { Invoke-AmUi { Disconnect-AmSession; Write-AmLine 'Signed out.' 'Green' } }
@@ -595,8 +774,12 @@ function Invoke-AmSettingsMenu {
 
 function Invoke-AmCreateMenu {
     Write-AmHeader 'Create'
-    Write-Host ' 1) New blueprint (+ principal)   2) New agent identity   0) Back'
-    switch (Read-Host 'Choose') {
+    Write-AmMenu -Sections @(
+        @{ Title = 'New'; Items = @(
+                (New-AmMenuItem '1' 'Blueprint' 'also creates its principal'),
+                (New-AmMenuItem '2' 'Agent identity' 'under an existing blueprint')) }
+    )
+    switch (Read-AmChoice) {
         '1' {
             Invoke-AmUi {
                 $name = Read-AmLine 'Blueprint name'
@@ -622,14 +805,22 @@ function Start-AmTui {
     param()
     while ($true) {
         Write-AmHeader 'Main menu'
-        Write-Host ' 1) Browse tree   2) Browse tree with permissions'
-        Write-Host ' 3) Manage a blueprint        (permissions, credentials, rename, DELETE)'
-        Write-Host ' 4) Manage an agent identity  (permissions, rename, enable/disable, DELETE)'
-        Write-Host ' 5) Create blueprint / agent identity   6) Agent Registry'
-        Write-Host ' 7) Settings / diagnostics   0) Quit'
-        switch (Read-Host 'Choose') {
-            '1' { Invoke-AmUi { Show-AmTree } }
-            '2' { Invoke-AmUi { Show-AmTree -Detailed } }
+        Write-AmMenu -ExitText 'Quit' -Sections @(
+            @{ Title = 'Overview'; Items = @(
+                    (New-AmMenuItem '1' 'Browse tree' 'blueprints and their agent identities'),
+                    (New-AmMenuItem '2' 'Browse tree with permissions' 'adds inherited / direct permissions')) },
+            @{ Title = 'Manage'; Items = @(
+                    (New-AmMenuItem '3' 'Blueprint' 'permissions, credentials, rename, delete'),
+                    (New-AmMenuItem '4' 'Agent identity' 'permissions, rename, enable, delete')) },
+            @{ Title = 'Create'; Items = @(
+                    (New-AmMenuItem '5' 'New blueprint / agent identity' '')) },
+            @{ Title = 'Tools'; Items = @(
+                    (New-AmMenuItem '6' 'Agent Registry' 'beta'),
+                    (New-AmMenuItem '7' 'Settings and diagnostics' 'sign-in, dry-run, call log')) }
+        )
+        switch (Read-AmChoice) {
+            '1' { Invoke-AmUi { Write-AmHeader 'Browse tree'; Show-AmTree } }
+            '2' { Invoke-AmUi { Write-AmHeader 'Browse tree with permissions'; Show-AmTree -Detailed } }
             '3' { Invoke-AmUi -NoPause { $bp = Select-AmBlueprintUi; if ($bp) { Invoke-AmBlueprintMenu -Bp $bp } } }
             '4' { Invoke-AmUi -NoPause { $a = Select-AmIdentityUi; if ($a) { Invoke-AmIdentityMenu -Agent $a } } }
             '5' { Invoke-AmCreateMenu }

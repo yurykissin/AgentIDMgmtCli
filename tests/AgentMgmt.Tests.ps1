@@ -276,3 +276,18 @@ Describe 'Effective permissions' {
         }
     }
 }
+
+Describe 'Menu rendering' {
+    It 'prints grouped sections, items with hints, and an exit row' {
+        $text = InModuleScope AgentMgmt {
+            $out = Write-AmMenu -ExitText 'Quit' -Sections @(
+                @{ Title = 'Manage'; Items = @((New-AmMenuItem '1' 'Rename' 'change the name'), (New-AmMenuItem '2' 'Delete' '' -Danger)) }
+            ) 6>&1
+            ($out | ForEach-Object { "$_" }) -join "`n"
+        }
+        $text | Should -Match 'MANAGE'
+        $text | Should -Match '1\s+Rename\s+change the name'
+        $text | Should -Match '2\s+Delete'
+        $text | Should -Match '0\s+Quit'
+    }
+}
