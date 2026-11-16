@@ -19,6 +19,18 @@ Describe 'Graph wrapper' {
         $r.Count | Should -Be 3
     }
 
+    It 'returns a real empty array (Count 0) when -All finds nothing' {
+        Mock -ModuleName AgentMgmt Invoke-AmHttp { [pscustomobject]@{ Status = 200; Content = '{"value":[]}' } }
+        $n = InModuleScope AgentMgmt { (@(Invoke-AmGraph -Method GET -All -Path '/x')).Count }
+        $n | Should -Be 0
+    }
+
+    It 'returns Count 1 for a single result' {
+        Mock -ModuleName AgentMgmt Invoke-AmHttp { [pscustomobject]@{ Status = 200; Content = '{"value":[{"id":"a"}]}' } }
+        $n = InModuleScope AgentMgmt { $x = @(Invoke-AmGraph -Method GET -All -Path '/x'); "$($x.Count)|$($x[0].id)" }
+        $n | Should -Be '1|a'
+    }
+
     It 'turns an HTTP error into AmGraphException with the agent-blocked hint' {
         Mock -ModuleName AgentMgmt Invoke-AmHttp {
             [pscustomobject]@{ Status = 400; Content = '{"error":{"code":"Request_BadRequest","message":"The specified app role cannot be granted to agent identities."}}' }

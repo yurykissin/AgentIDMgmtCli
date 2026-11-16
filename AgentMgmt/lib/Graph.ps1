@@ -164,7 +164,8 @@ function Invoke-AmGraph {
         }
     } while ($next)
 
-    if ($All) { return , @($items) }
+    # Emit the items unrolled; callers wrap in @() so empty and single results stay arrays.
+    if ($All) { return $items.ToArray() }
     return $result
 }
 
