@@ -206,6 +206,24 @@ function Get-AmAccessToken {
     return $script:State.AccessToken
 }
 
+function Invoke-AmWithPropagationRetry {
+    # Entra is eventually consistent: a just-created app/SP can be invisible to the next call for a few seconds.
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][scriptblock]$Action, [int]$MaxAttempts = 8, [int]$DelaySeconds = 4)
+    for ($i = 1; ; $i++) {
+        try { return (& $Action) }
+        catch {
+            $m = $_.Exception.Message
+            $transient = ($m -match 'does not reference a valid application object') -or
+                ($m -match 'Resource .* does not exist or one of its queried reference-property objects are not present') -or
+                ($m -match 'Request_ResourceNotFound')
+            if (-not $transient -or $i -ge $MaxAttempts) { throw }
+            Write-Host "  waiting for Entra to replicate the new object (attempt $i of $MaxAttempts)..." -ForegroundColor DarkGray
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+}
+
 function Initialize-AmToolkitApp {
     [CmdletBinding()]
     param([string]$TenantId, [switch]$Force)
@@ -260,7 +278,10 @@ function Initialize-AmToolkitApp {
     }
 
     $sp = @(Invoke-AmGraph -Method GET -Token $bt -All -Path "/servicePrincipals?`$filter=appId eq '$($app.appId)'&`$select=id,appId")
-    $spId = if ($sp.Count -gt 0) { $sp[0].id } else { (Invoke-AmGraph -Method POST -Token $bt -Path '/servicePrincipals' -Body @{ appId = $app.appId }).id }
+    $appIdValue = $app.appId
+    $spId = if ($sp.Count -gt 0) { $sp[0].id } else {
+        (Invoke-AmWithPropagationRetry { Invoke-AmGraph -Method POST -Token $bt -Path '/servicePrincipals' -Body @{ appId = $appIdValue } }).id
+    }
 
     $scopeString = $granted -join ' '
     $grants = @(Invoke-AmGraph -Method GET -Token $bt -All -Path "/oauth2PermissionGrants?`$filter=clientId eq '$spId' and resourceId eq '$($graph.id)'")
@@ -268,12 +289,13 @@ function Initialize-AmToolkitApp {
     if ($adminGrant) {
         $null = Invoke-AmGraph -Method PATCH -Token $bt -Path "/oauth2PermissionGrants/$($adminGrant.id)" -Body @{ scope = $scopeString }
     } else {
-        $null = Invoke-AmGraph -Method POST -Token $bt -Path '/oauth2PermissionGrants' -Body @{
+        $grantBody = @{
             clientId    = $spId
             consentType = 'AllPrincipals'
             resourceId  = $graph.id
             scope       = $scopeString
         }
+        $null = Invoke-AmWithPropagationRetry { Invoke-AmGraph -Method POST -Token $bt -Path '/oauth2PermissionGrants' -Body $grantBody }
     }
 
     $script:State.TenantId = $tenant

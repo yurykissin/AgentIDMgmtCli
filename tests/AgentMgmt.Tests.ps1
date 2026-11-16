@@ -66,6 +66,27 @@ Describe 'Graph wrapper' {
     }
 }
 
+Describe 'Propagation retry' {
+    It 'retries while a new app is not yet replicated, then succeeds' {
+        Mock -ModuleName AgentMgmt Start-Sleep { }
+        Mock -ModuleName AgentMgmt Write-Host { }
+        $r = InModuleScope AgentMgmt {
+            $script:pn = 0
+            Invoke-AmWithPropagationRetry {
+                $script:pn++
+                if ($script:pn -lt 3) { throw 'The appId x of the service principal does not reference a valid application object.' }
+                'ok'
+            }
+        }
+        $r | Should -Be 'ok'
+    }
+    It 'does not retry unrelated errors' {
+        Mock -ModuleName AgentMgmt Start-Sleep { }
+        { InModuleScope AgentMgmt { Invoke-AmWithPropagationRetry { throw 'Forbidden' } } } | Should -Throw 'Forbidden'
+        Should -Invoke -ModuleName AgentMgmt Start-Sleep -Times 0
+    }
+}
+
 Describe 'Blocked-for-agents list' {
     It 'blocks User.ReadWrite.All for application and delegated' {
         InModuleScope AgentMgmt {
