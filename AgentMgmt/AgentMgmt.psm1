@@ -3,7 +3,7 @@ Set-StrictMode -Version 1
 
 $script:ModuleRoot = $PSScriptRoot
 
-foreach ($file in 'State', 'Graph', 'Auth', 'Catalog', 'Blueprints', 'Identities', 'Permissions', 'Credentials', 'Registry', 'Diagnose', 'Tui', 'Commands') {
+foreach ($file in 'State', 'Graph', 'Auth', 'Catalog', 'Blueprints', 'Identities', 'Permissions', 'Credentials', 'Registry', 'Diagnose', 'Migration', 'Tui', 'Commands') {
     . (Join-Path $PSScriptRoot "lib/$file.ps1")
 }
 

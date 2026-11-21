@@ -9,3 +9,4 @@ tokens.json
 config.json
 *.secret
 *.zip
+exports/

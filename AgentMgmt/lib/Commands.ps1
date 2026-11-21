@@ -36,6 +36,7 @@ Commands (all accept --dry-run via the -DryRun switch of agentmgmt.ps1):
   agent-grant --agent X --permission P [--type application|delegated] [--resource R]
   secret-new --blueprint X [--name N] [--days 90]
   register --agent X [--name N]
+  app-export --app X [--output DIRECTORY] [--force]  read-only migration inventory to local JSON
   blocked [--search S]                      show the blocked-for-agents list
 '@
 }
@@ -109,6 +110,15 @@ function Invoke-AmCommand {
         'register' {
             $a = & $resolveAgent
             Register-AmAgent -IdentityId $a.id -Name (Get-AmOpt $Options 'name')
+        }
+        'app-export' {
+            $candidate = Resolve-AmMigrationCandidate -Selector (Get-AmOpt $Options 'app' -Required)
+            $exportOptions = @{ Candidate = $candidate; Force = $Options.ContainsKey('force') }
+            $outputDirectory = Get-AmOpt $Options 'output'
+            if ($outputDirectory) { $exportOptions.OutputDirectory = $outputDirectory }
+            $result = Export-AmMigrationInventory @exportOptions
+            "Saved migration inventory: $($result.Path)"
+            foreach ($warning in $result.Warnings) { Write-Warning $warning }
         }
         'blocked' {
             $list = Get-AmBlockedList

@@ -800,6 +800,23 @@ function Invoke-AmCreateMenu {
     }
 }
 
+function Invoke-AmMigrationExportUi {
+    Write-AmHeader 'Tools > Export existing app for migration'
+    Write-AmLine '  Read-only discovery. No blueprint is created and the source is unchanged.' 'DarkGray'
+    $search = Read-AmLine 'App name contains (blank lists all standard apps)'
+    $items = @(Get-AmMigrationCandidates | Where-Object { -not $search -or $_.displayName.IndexOf($search, [StringComparison]::OrdinalIgnoreCase) -ge 0 })
+    $candidate = Read-AmPick -Title 'Choose an app registration / enterprise application' -Items $items -Label {
+        param($item)
+        $kind = if ($item.applicationObjectId) { 'app registration' } else { 'enterprise app only' }
+        "$($item.displayName) [$($item.appId)] ($kind)"
+    }
+    if (-not $candidate) { return }
+    $outputDirectory = Read-AmLine 'Local output directory' (Join-Path (Get-Location).Path 'exports')
+    $result = Export-AmMigrationInventory -Candidate $candidate -OutputDirectory $outputDirectory
+    Write-AmLine "  Saved: $($result.Path)" 'Green'
+    foreach ($warning in $result.Warnings) { Write-AmLine "  Review: $warning" 'Yellow' }
+}
+
 function Start-AmTui {
     [CmdletBinding()]
     param()
@@ -816,7 +833,8 @@ function Start-AmTui {
                     (New-AmMenuItem '5' 'New blueprint / agent identity' '')) },
             @{ Title = 'Tools'; Items = @(
                     (New-AmMenuItem '6' 'Agent Registry' 'beta'),
-                    (New-AmMenuItem '7' 'Settings and diagnostics' 'sign-in, dry-run, call log')) }
+                    (New-AmMenuItem '7' 'Settings and diagnostics' 'sign-in, dry-run, call log'),
+                    (New-AmMenuItem '8' 'Export existing app' 'read-only migration inventory (JSON)')) }
         )
         switch (Read-AmChoice) {
             '1' { Invoke-AmUi { Write-AmHeader 'Browse tree'; Show-AmTree } }
@@ -826,6 +844,7 @@ function Start-AmTui {
             '5' { Invoke-AmCreateMenu }
             '6' { Invoke-AmRegistryMenu }
             '7' { Invoke-AmSettingsMenu }
+            '8' { Invoke-AmUi { Invoke-AmMigrationExportUi } }
             '0' { return }
             default { }
         }

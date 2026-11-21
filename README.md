@@ -40,6 +40,7 @@ Sign-in tries the browser (PKCE on localhost) and falls back to device code. The
 | Credentials | Client secret (shown once), federated credential, expiry list |
 | People | Sponsors and owners add/remove |
 | Registry (beta) | List, register existing identity, rename, delete |
+| Migration inventory | Select an existing app registration / enterprise app and export a read-only local JSON inventory |
 | Other | Dry-run mode, Graph call log, non-interactive commands |
 
 ### The permission model in one picture
@@ -70,6 +71,28 @@ Microsoft blocks some permissions for agent identities, for example `User.ReadWr
 ```
 
 Options use `--name value`. `-DryRun` prints every write call instead of sending it. Destructive commands need `--yes`.
+
+## Export an existing app for migration
+
+Choose **8 > Export existing app** from the main menu, search by name, then select an app by number. App registrations and their enterprise applications are paired by app ID. Enterprise applications without a local app registration are also selectable. Existing Agent ID objects and managed identities are excluded.
+
+```powershell
+./agentmgmt.ps1 -Command app-export --app "Customer Service Agent"
+./agentmgmt.ps1 -Command app-export --app "<app-id-or-object-id>" --output "C:\AgentExports"
+```
+
+The default output is `./exports/<safe-app-name>--<appId>/app.json`, relative to your current directory. Duplicate names are distinguished by app ID, unsafe filename characters are replaced, and existing exports are not overwritten unless you explicitly pass `--force`. Use separate output roots for different customer tenants. The default `exports/` directory is git-ignored; exports contain customer configuration and should stay private.
+
+The JSON contains:
+
+- Source tenant, app ID, application and service-principal object IDs.
+- Configured API permissions **separately** from actual application-role assignments and delegated consent grants. Includes Graph and other resource APIs, permission names/IDs, and tenant-wide versus user-specific consent.
+- Application and enterprise-app owners, credential metadata (never secret values or certificate key material), federated identity settings, and redirect/authentication configuration.
+- Blocked/unclear Graph permission warnings using the bundled catalog, with its source and fetch date. Other APIs are marked `NotEvaluated`, not assumed compatible. Missing permission definitions keep their original IDs and produce warnings.
+
+This feature sends only Graph **GET** requests. It creates no blueprint or agent identity, grants no consent, and changes or deletes nothing in the tenant. It still writes the local JSON when toolkit dry-run is enabled. Normal token refresh/sign-in may occur if needed. If a configuration/permission read fails (other than a missing resource API definition), the export fails instead of producing a misleading incomplete inventory.
+
+An enterprise-app-only export cannot read the home tenant's app registration. An app-registration-only export has no local grants. Both situations are called out explicitly. Azure RBAC, Entra directory roles, Conditional Access, sign-in logs and code/downstream dependencies are **not collected** and need manual review. A JSON inventory is not a working migration: credentials, a sponsor and workload authentication changes still need planning. See [Microsoft's migration guidance](https://learn.microsoft.com/entra/agent-id/migrate-custom-app-registrations-to-agent-id).
 
 ## Verified vs unverified
 
@@ -111,7 +134,7 @@ Invoke-Pester ./tests
 ```
 agentmgmt.ps1         entry point (menu or -Command)
 AgentMgmt/            module (State, Graph, Auth, Catalog, Blueprints, Identities,
-                      Permissions, Credentials, Registry, Diagnose, Tui, Commands)
+                      Permissions, Credentials, Registry, Diagnose, Migration, Tui, Commands)
 tests/                Pester tests (offline)
 legacy/               previous a365/Azure CLI script and Python CLI docs
 agentmgmtcli/         previous Python CLI, kept for reference only
