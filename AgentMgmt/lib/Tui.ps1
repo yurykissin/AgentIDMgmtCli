@@ -589,7 +589,8 @@ function Invoke-AmBlueprintMenu {
             @{ Title = 'Agent identities'; Items = @(
                     (New-AmMenuItem '4' 'Create agent identity' 'under this blueprint')) },
             @{ Title = 'Manage'; Items = @(
-                    (New-AmMenuItem '5' 'Rename' '')) },
+                    (New-AmMenuItem '5' 'Rename' ''),
+                    (New-AmMenuItem '7' 'Repair missing principal' 'safe to repeat; reuses an existing one')) },
             @{ Title = 'Danger zone'; Items = @(
                     (New-AmMenuItem '6' 'Delete blueprint' 'also deletes its agent identities' -Danger)) }
         )
@@ -623,6 +624,12 @@ function Invoke-AmBlueprintMenu {
                     } else { Write-AmLine 'Cancelled.' 'Yellow' }
                 }
                 return
+            }
+            '7' {
+                Invoke-AmUi {
+                    $principal = Initialize-AmBlueprintPrincipal -BlueprintAppId $Bp.appId
+                    if ($principal) { Write-AmLine "Blueprint principal ready: $($principal.id)" 'Green' }
+                }
             }
             '0' { return }
             default { }

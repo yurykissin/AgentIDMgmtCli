@@ -24,6 +24,7 @@ Commands (all accept --dry-run via the -DryRun switch of agentmgmt.ps1):
   login | logout
   bp-list | agent-list [--blueprint X]
   bp-new --name N
+  bp-principal --blueprint X                 create missing principal or return the existing one
   bp-rename --blueprint X --name N
   bp-delete --blueprint X [--with-children] --yes
   agent-new --blueprint X --name N
@@ -71,6 +72,7 @@ function Invoke-AmCommand {
             Get-AmIdentities -BlueprintAppId $appId | Select-Object displayName, id, appId, accountEnabled, agentIdentityBlueprintId
         }
         'bp-new' { New-AmBlueprint -Name (Get-AmOpt $Options 'name' -Required) }
+        'bp-principal' { $bp = & $resolveBp; Initialize-AmBlueprintPrincipal -BlueprintAppId $bp.appId }
         'bp-rename' { $bp = & $resolveBp; Rename-AmBlueprint -Id $bp.id -Name (Get-AmOpt $Options 'name' -Required) }
         'bp-delete' { & $needYes; $bp = & $resolveBp; Remove-AmBlueprint -Id $bp.id -WithChildren:($Options.ContainsKey('with-children')) }
         'agent-new' { $bp = & $resolveBp; New-AmIdentity -BlueprintAppId $bp.appId -Name (Get-AmOpt $Options 'name' -Required) }

@@ -122,6 +122,7 @@ Notes:
 | Token lacks scopes | Settings > Set up toolkit app with force, then sign in again. |
 | Registry "unknown" | Preview API not readable by the current token or tenant; the rest of the toolkit is unaffected. |
 | Blueprint delete seems slow | Deleting a blueprint cascades to its identities asynchronously; refresh the tree after a moment. |
+| Creating a blueprint principal says the appId does not reference a valid application | Entra replication lag. Creation retries for about 28 seconds without creating another blueprint. If it still fails, the blueprint remains: select it in **3 > Blueprint**, then **7 > Repair missing principal**, or run `./agentmgmt.ps1 -Command bp-principal --blueprint "<blueprint-appId>"`. Repair reuses an existing principal and never creates another blueprint. |
 
 ## Tests
 

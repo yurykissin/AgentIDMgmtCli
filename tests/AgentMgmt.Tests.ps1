@@ -115,6 +115,66 @@ Describe 'Blueprint application permissions' {
     }
 }
 
+Describe 'Blueprint provisioning' {
+    BeforeEach {
+        Mock -ModuleName AgentMgmt Get-AmCurrentUser { [pscustomobject]@{ id = 'me-id' } }
+        Mock -ModuleName AgentMgmt Get-AmBlueprintPrincipal { $null }
+        Mock -ModuleName AgentMgmt Start-Sleep { }
+        Mock -ModuleName AgentMgmt Write-Host { }
+        Mock -ModuleName AgentMgmt Write-Warning { }
+        Mock -ModuleName AgentMgmt Invoke-AmGraph {
+            [pscustomobject]@{ id = 'bp-object'; appId = 'bp-client'; displayName = 'Lab Agent Blueprint' }
+        }
+    }
+
+    It 'retries principal creation on replication lag without creating another blueprint' {
+        $script:principalAttempts = 0
+        Mock -ModuleName AgentMgmt Invoke-AmGraph {
+            $script:principalAttempts++
+            if ($script:principalAttempts -lt 3) { throw "The appId 'bp-client' of the service principal does not reference a valid application object." }
+            [pscustomobject]@{ id = 'principal-object'; appId = 'bp-client' }
+        } -ParameterFilter { $Path -eq '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' }
+        $r = New-AmBlueprint -Name 'Lab Agent Blueprint'
+        $r.Blueprint.id | Should -Be 'bp-object'
+        $r.Principal.id | Should -Be 'principal-object'
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 1 -Exactly -ParameterFilter { $Method -eq 'POST' -and $Path -eq '/applications/microsoft.graph.agentIdentityBlueprint' }
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 3 -Exactly -ParameterFilter { $Method -eq 'POST' -and $Path -eq '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' -and $Body.appId -eq 'bp-client' }
+        Should -Invoke -ModuleName AgentMgmt Start-Sleep -Times 2 -Exactly
+    }
+
+    It 'reuses an existing principal when repairing a blueprint' {
+        Mock -ModuleName AgentMgmt Get-AmBlueprintPrincipal { [pscustomobject]@{ id = 'existing-principal'; appId = 'bp-client' } }
+        $r = Initialize-AmBlueprintPrincipal -BlueprintAppId 'bp-client'
+        $r.id | Should -Be 'existing-principal'
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 0 -Exactly
+    }
+
+    It 'does not retry unrelated errors and reports the already-created blueprint for recovery' {
+        Mock -ModuleName AgentMgmt Invoke-AmGraph { throw 'Forbidden' } -ParameterFilter { $Path -eq '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' }
+        { New-AmBlueprint -Name 'Lab Agent Blueprint' } | Should -Throw 'Forbidden'
+        Should -Invoke -ModuleName AgentMgmt Start-Sleep -Times 0 -Exactly
+        Should -Invoke -ModuleName AgentMgmt Write-Warning -ParameterFilter { $Message -like '*bp-client*bp-principal*' }
+    }
+
+    It 'stops after the bounded propagation retry and never recreates the application' {
+        Mock -ModuleName AgentMgmt Invoke-AmGraph { throw 'The appId does not reference a valid application object.' } -ParameterFilter { $Path -eq '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' }
+        { New-AmBlueprint -Name 'Lab Agent Blueprint' } | Should -Throw '*does not reference a valid application object*'
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 8 -Exactly -ParameterFilter { $Path -eq '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' }
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 1 -Exactly -ParameterFilter { $Path -eq '/applications/microsoft.graph.agentIdentityBlueprint' }
+        Should -Invoke -ModuleName AgentMgmt Start-Sleep -Times 7 -Exactly
+    }
+
+    It 'repairs the selected blueprint through the CLI without posting another application' {
+        Mock -ModuleName AgentMgmt Resolve-AmBlueprint { [pscustomobject]@{ id = 'bp-object'; appId = 'bp-client' } }
+        Mock -ModuleName AgentMgmt Invoke-AmGraph { [pscustomobject]@{ id = 'repaired-principal'; appId = 'bp-client' } }
+        $r = Invoke-AmCommand -Name bp-principal -Options @{ blueprint = 'bp-client' }
+        $r.id | Should -Be 'repaired-principal'
+        Should -Invoke -ModuleName AgentMgmt Resolve-AmBlueprint -ParameterFilter { $Selector -eq 'bp-client' }
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 0 -Exactly -ParameterFilter { $Path -like '/applications*' }
+        Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -Times 1 -Exactly -ParameterFilter { $Method -eq 'POST' -and $Body.appId -eq 'bp-client' }
+    }
+}
+
 Describe 'Credentials' {
     It 'reads secrets from the plain application route' {
         Mock -ModuleName AgentMgmt Invoke-AmGraph {
@@ -163,6 +223,7 @@ Describe 'Request bodies' {
     }
 
     It 'creates a blueprint and then its principal' {
+        Mock -ModuleName AgentMgmt Get-AmBlueprintPrincipal { $null }
         Mock -ModuleName AgentMgmt Invoke-AmGraph { [pscustomobject]@{ id = 'o'; appId = 'app1' } }
         InModuleScope AgentMgmt { $null = New-AmBlueprint -Name 'bp' }
         Should -Invoke -ModuleName AgentMgmt Invoke-AmGraph -ParameterFilter { $Path -eq '/applications/microsoft.graph.agentIdentityBlueprint' }

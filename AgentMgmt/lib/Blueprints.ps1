@@ -49,6 +49,17 @@ function Get-AmBlueprintPrincipal {
     return $null
 }
 
+function Initialize-AmBlueprintPrincipal {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$BlueprintAppId)
+    $appIdValue = $BlueprintAppId
+    Invoke-AmWithPropagationRetry {
+        $existing = Get-AmBlueprintPrincipal -BlueprintAppId $appIdValue
+        if ($existing) { return $existing }
+        Invoke-AmGraph -Method POST -Path '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' -Body @{ appId = $appIdValue }
+    }
+}
+
 function New-AmBlueprint {
     [CmdletBinding()]
     param(
@@ -67,7 +78,11 @@ function New-AmBlueprint {
     $bp = Invoke-AmGraph -Method POST -Path '/applications/microsoft.graph.agentIdentityBlueprint' -Body $body
     if (-not $bp) { return $null }
     # The principal is not created automatically; without it the blueprint cannot be used in the tenant.
-    $principal = Invoke-AmGraph -Method POST -Path '/servicePrincipals/microsoft.graph.agentIdentityBlueprintPrincipal' -Body @{ appId = $bp.appId }
+    try { $principal = Initialize-AmBlueprintPrincipal -BlueprintAppId $bp.appId }
+    catch {
+        Write-Warning "Blueprint '$($bp.displayName)' already exists (appId=$($bp.appId), objectId=$($bp.id)), but its principal could not be provisioned. Do not create another blueprint. Use Manage blueprint > Repair missing principal, or -Command bp-principal --blueprint $($bp.appId), to retry."
+        throw
+    }
     return [pscustomobject]@{ Blueprint = $bp; Principal = $principal }
 }
 
