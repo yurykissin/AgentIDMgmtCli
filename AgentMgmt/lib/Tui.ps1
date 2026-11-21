@@ -637,6 +637,59 @@ function Invoke-AmBlueprintMenu {
     }
 }
 
+function Invoke-AmNewAgentUserUi {
+    param($Agent)
+    Write-AmHeader "Agent '$($Agent.displayName)' > Create agent user"
+    Write-AmKv 'Parent ID' $Agent.id
+    Write-AmKv 'Blueprint' $Agent.agentIdentityBlueprintId
+    Write-AmLine '  Immutable 1:1 link. Creates an Entra agentUser, not a mailbox or Teams teammate.' 'Yellow'
+    Write-AmLine '  Requires blueprint application permission AgentIdUser.ReadWrite.IdentityParentedBy.' 'DarkGray'
+    $name = Read-AmLine 'Agent-user display name' "$($Agent.displayName) User"
+    $alias = Read-AmLine 'Mail nickname (letters/digits, dot, underscore, hyphen)'
+    $upn = Read-AmLine 'User principal name (alias@verified-domain)'
+    if (-not (Confirm-AmYesNo "Create '$upn' permanently linked to child object ID $($Agent.id)?")) {
+        Write-AmLine 'Cancelled.' 'Yellow'
+        return
+    }
+    $user = New-AmAgentUser -IdentityId $Agent.id -Name $name -MailNickname $alias -UserPrincipalName $upn
+    if ($user) {
+        Write-AmLine 'Agent user created and read-back validated.' 'Green'
+        Write-AmKv 'User ID' $user.id
+        Write-AmKv 'UPN' $user.userPrincipalName
+        Write-AmKv 'Parent ID' $user.identityParentId
+    }
+}
+
+function Invoke-AmAgentUserMenu {
+    param($Agent)
+    while ($true) {
+        Write-AmHeader "Agent '$($Agent.displayName)' > Agent user / teammate identity"
+        Write-AmKv 'Parent ID' $Agent.id
+        Write-AmMenu -Sections @(
+            @{ Title = 'Agent user'; Items = @(
+                    (New-AmMenuItem '1' 'Show linked agent user' 'read-only'),
+                    (New-AmMenuItem '2' 'Create agent user' 'blueprint credential; immutable 1:1 link')) }
+        )
+        switch (Read-AmChoice) {
+            '1' {
+                Invoke-AmUi {
+                    $user = Get-AmAgentUser -IdentityId $Agent.id
+                    if ($user) {
+                        Write-AmKv 'User ID' $user.id
+                        Write-AmKv 'Name' $user.displayName
+                        Write-AmKv 'UPN' $user.userPrincipalName
+                        Write-AmKv 'Parent ID' $user.identityParentId
+                        Write-AmKv 'Enabled' ([string]$user.accountEnabled)
+                    } else { Write-AmLine 'No agent-user account is linked to this child agent.' 'DarkGray' }
+                }
+            }
+            '2' { Invoke-AmUi { Invoke-AmNewAgentUserUi -Agent $Agent } }
+            '0' { return }
+            default { }
+        }
+    }
+}
+
 function Invoke-AmIdentityMenu {
     param($Agent)
     while ($true) {
@@ -646,7 +699,8 @@ function Invoke-AmIdentityMenu {
         Write-AmMenu -Sections @(
             @{ Title = 'Configure'; Items = @(
                     (New-AmMenuItem '1' 'Permissions' 'effective, grant, revoke'),
-                    (New-AmMenuItem '2' 'Sponsors' '')) },
+                    (New-AmMenuItem '2' 'Sponsors' ''),
+                    (New-AmMenuItem '7' 'Agent user / teammate identity' 'show or create the linked user')) },
             @{ Title = 'Manage'; Items = @(
                     (New-AmMenuItem '3' 'Rename' ''),
                     (New-AmMenuItem '4' 'Enable / disable' 'toggles sign-in for this agent'),
@@ -657,6 +711,7 @@ function Invoke-AmIdentityMenu {
         switch (Read-AmChoice) {
             '1' { Invoke-AmIdentityPermissionMenu -Agent $Agent }
             '2' { Invoke-AmPeopleMenu -Kind Identity -Obj $Agent }
+            '7' { Invoke-AmAgentUserMenu -Agent $Agent }
             '3' {
                 Invoke-AmUi {
                     $name = Read-AmLine 'New name' $Agent.displayName
@@ -784,7 +839,8 @@ function Invoke-AmCreateMenu {
     Write-AmMenu -Sections @(
         @{ Title = 'New'; Items = @(
                 (New-AmMenuItem '1' 'Blueprint' 'also creates its principal'),
-                (New-AmMenuItem '2' 'Agent identity' 'under an existing blueprint')) }
+                (New-AmMenuItem '2' 'Agent identity' 'under an existing blueprint'),
+                (New-AmMenuItem '3' 'Agent user / teammate identity' 'linked to an existing child agent')) }
     )
     switch (Read-AmChoice) {
         '1' {
@@ -801,6 +857,12 @@ function Invoke-AmCreateMenu {
                 $name = Read-AmLine 'Agent identity name'
                 $r = New-AmIdentity -BlueprintAppId $bp.appId -Name $name
                 if ($r) { Write-AmLine "Created $($r.displayName) id=$($r.id)" 'Green' }
+            }
+        }
+        '3' {
+            Invoke-AmUi {
+                $agent = Select-AmIdentityUi
+                if ($agent) { Invoke-AmNewAgentUserUi -Agent $agent }
             }
         }
         default { }

@@ -31,6 +31,8 @@ Commands (all accept --dry-run via the -DryRun switch of agentmgmt.ps1):
   agent-rename --agent X --name N
   agent-delete --agent X --yes
   agent-enable --agent X | agent-disable --agent X
+  agent-user-new --agent X --name N --alias A --upn U [--secret-env VARIABLE] [--disabled]
+  agent-user-show --agent X                 linked agent-user account (read-only)
   perms --agent X                           effective permissions (inherited + direct)
   bp-perms --blueprint X                    permissions declared/consented/inheritable
   bp-grant --blueprint X --permission P[,P2] [--type delegated|application] [--resource R] [--no-inherit]
@@ -80,6 +82,18 @@ function Invoke-AmCommand {
         'agent-delete' { & $needYes; $a = & $resolveAgent; Remove-AmIdentity -Id $a.id }
         'agent-enable' { $a = & $resolveAgent; Set-AmIdentityEnabled -Id $a.id -Enabled $true }
         'agent-disable' { $a = & $resolveAgent; Set-AmIdentityEnabled -Id $a.id -Enabled $false }
+        'agent-user-new' {
+            $a = & $resolveAgent
+            New-AmAgentUser -IdentityId $a.id -Name (Get-AmOpt $Options 'name' -Required) `
+                -MailNickname (Get-AmOpt $Options 'alias' -Required) -UserPrincipalName (Get-AmOpt $Options 'upn' -Required) `
+                -SecretEnvironmentVariable (Get-AmOpt $Options 'secret-env') -Enabled:(-not $Options.ContainsKey('disabled'))
+        }
+        'agent-user-show' {
+            $a = & $resolveAgent
+            $user = Get-AmAgentUser -IdentityId $a.id
+            if ($user) { $user }
+            else { "No agent-user account is linked to '$($a.displayName)' (objectId=$($a.id))." }
+        }
         'perms' { $a = & $resolveAgent; Get-AmEffectivePermissions -IdentityId $a.id }
         'bp-perms' { $bp = & $resolveBp; Show-AmBlueprintPermissions -Bp $bp }
         'bp-grant' {

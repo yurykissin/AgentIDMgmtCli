@@ -206,6 +206,40 @@ function Get-AmAccessToken {
     return $script:State.AccessToken
 }
 
+function Get-AmBlueprintGraphToken {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ClientId,
+        [Parameter(Mandatory)][string]$TenantId,
+        [Parameter(Mandatory)][Security.SecureString]$ClientSecret
+    )
+    if (-not (Test-AmGuid $ClientId) -or -not (Test-AmGuid $TenantId)) { throw 'Blueprint client ID and tenant ID must be GUIDs.' }
+    if ($ClientSecret.Length -eq 0) { throw 'The blueprint client secret must not be empty.' }
+    $pointer = [IntPtr]::Zero
+    $form = $null
+    try {
+        $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($ClientSecret)
+        $form = @{
+            client_id = $ClientId
+            client_secret = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer)
+            grant_type = 'client_credentials'
+            scope = 'https://graph.microsoft.com/.default'
+        }
+        try { $response = Invoke-AmForm -Uri "$(Get-AmAuthority $TenantId)/token" -Form $form }
+        catch { throw 'Blueprint Graph token request failed. Check connectivity, tenant, blueprint client ID and credential. No user was created.' }
+        if ($response.Status -ne 200 -or [string]::IsNullOrWhiteSpace($response.Json.access_token)) {
+            # Identity-provider error descriptions can echo submitted values; never emit them here.
+            $knownErrors = @('invalid_client', 'unauthorized_client', 'invalid_scope', 'invalid_grant', 'invalid_request', 'unsupported_grant_type', 'temporarily_unavailable', 'server_error')
+            $code = if ($knownErrors -contains $response.Json.error) { $response.Json.error } else { 'token_request_failed' }
+            throw "Blueprint Graph token request failed ($code). Check the blueprint client ID, secret VALUE (not its key ID), tenant and Graph application permission/admin consent. No user was created."
+        }
+        return [string]$response.Json.access_token
+    } finally {
+        if ($form) { $form.Clear() }
+        if ($pointer -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+    }
+}
+
 function Invoke-AmWithPropagationRetry {
     # Entra is eventually consistent: a just-created app/SP can be invisible to the next call for a few seconds.
     [CmdletBinding()]
