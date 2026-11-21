@@ -61,6 +61,8 @@ Microsoft blocks some permissions for agent identities, for example `User.ReadWr
 
 ## Non-interactive use
 
+For a separate **no-AI agent-user identity lab**, see [`samples/identity-runtime`](samples/identity-runtime/README.md). It provides a terminal Graph `/me` probe, optional read-only mailbox check, and SDK-authenticated Teams echo runtime. It does not provision Microsoft 365 teammates, and adds no dependencies to this PowerShell toolkit.
+
 ```powershell
 ./agentmgmt.ps1 -Command help
 ./agentmgmt.ps1 -Command tree

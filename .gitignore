@@ -10,3 +10,9 @@ config.json
 *.secret
 *.zip
 exports/
+samples/identity-runtime/node_modules/
+samples/identity-runtime/dist/
+samples/identity-runtime/.env
+samples/identity-runtime/.env.*
+!samples/identity-runtime/.env.example
+samples/identity-runtime/*.local.json
